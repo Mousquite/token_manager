@@ -1,6 +1,7 @@
 # src/excel_manager.py
 
 import openpyxl
+import os
 from datetime import datetime
 
 class ExcelManager:
@@ -10,6 +11,21 @@ class ExcelManager:
         self.sheet = None
         self.headers = []
         self.dirty = False
+
+
+    def load_excel(self):
+        print("Chargement du fichier...")
+        if not os.path.exists(self.filepath):
+            print(f"Fichier {self.filepath} non trouvé, création...")
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.title = "Tokens"
+            sheet.append(["Name", "Value"])
+            workbook.save(self.filepath)
+
+        self.workbook = openpyxl.load_workbook(self.filepath)
+        self.sheet = self.workbook.active
+
 
     def load_excel(self):
         try:
