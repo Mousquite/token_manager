@@ -1,99 +1,55 @@
-import pandas as pd
-import os
+# src/excel_manager.py
+
+import openpyxl
 from datetime import datetime
 
 class ExcelManager:
-    def __init__(self, filepath):
+    def __init__(self, filepath="tokens.xlsx"):
         self.filepath = filepath
-        self.df = None
-        self.dirty = False  # Pour savoir si des modifications non sauvegardées existent
+        self.workbook = None
+        self.sheet = None
+        self.headers = []
+        self.dirty = False
 
     def load_excel(self):
-        """Charge le fichier Excel dans un DataFrame."""
-        if not os.path.exists(self.filepath):
+        try:
+            print("Chargement du fichier...")
+            self.workbook = openpyxl.load_workbook(self.filepath)
+            self.sheet = self.workbook.active
+            self.headers = [cell.value for cell in self.sheet[1]]
+            print(f"Chargement réussi ({self.sheet.max_row - 1} lignes).")
+        except FileNotFoundError:
             raise FileNotFoundError(f"Fichier non trouvé : {self.filepath}")
-        self.df = pd.read_excel(self.filepath, engine="openpyxl")
-        self.check_expired_listings()
-        print(f"Chargement réussi ({len(self.df)} lignes).")
 
-    def save_excel(self):
-        """Sauvegarde le DataFrame actuel dans le fichier Excel."""
-        if self.df is None:
-            raise ValueError("Aucun fichier chargé.")
-        self.df.to_excel(self.filepath, index=False, engine="openpyxl")
-        self.dirty = False
-        print("Sauvegarde réussie.")
+    def get_all_tokens(self):
+        tokens = []
+        for row in self.sheet.iter_rows(min_row=2, values_only=True):
+            token = {self.headers[i]: row[i] for i in range(len(self.headers))}
+            tokens.append(token)
+        return tokens
 
-    def mark_dirty(self):
-        """Indique qu'il y a eu des modifications non sauvegardées."""
+    def update_token_field(self, row_idx, field, value):
+        if field not in self.headers:
+            raise ValueError(f"Champ {field} introuvable.")
+        col_idx = self.headers.index(field) + 1
+        self.sheet.cell(row=row_idx + 2, column=col_idx, value=value)
         self.dirty = True
 
-    def update_token_field(self, index, field, value):
-        """Met à jour un champ pour une ligne précise."""
-        if self.df is None:
-            raise ValueError("Aucun fichier chargé.")
-        if field not in self.df.columns:
-            raise ValueError(f"Champ {field} introuvable.")
-        self.df.at[index, field] = value
-        self.mark_dirty()
+    def update_last_scraped(self, row_idx):
+        if "last_scraped" not in self.headers:
+            raise ValueError("Champ 'last_scraped' non trouvé.")
+        col_idx = self.headers.index("last_scraped") + 1
+        today = datetime.now().strftime("%Y-%m-%d")
+        self.sheet.cell(row=row_idx + 2, column=col_idx, value=today)
+        self.dirty = True
 
-    def batch_update_tokens(self, indices, field, value):
-        """Met à jour un champ pour plusieurs lignes."""
-        if self.df is None:
-            raise ValueError("Aucun fichier chargé.")
-        if field not in self.df.columns:
-            raise ValueError(f"Champ {field} introuvable.")
-        for idx in indices:
-            self.df.at[idx, field] = value
-        self.mark_dirty()
-
-    def refresh_last_scraped(self, indices):
-        """Met à jour la date last_scraped des tokens mis à jour."""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for idx in indices:
-            self.df.at[idx, "last_scraped"] = now
-        self.mark_dirty()
-
-    def update_last_listing(self, index):
-        """Met à jour last_listing et last_duration lors d'un listing."""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.df.at[index, "last_listing"] = now
-        duration = self.df.at[index, "duration"]
-        self.df.at[index, "last_duration"] = duration
-        self.mark_dirty()
-
-    def check_expired_listings(self):
-        """Réinitialise last_listing si le listing est expiré."""
-        now = datetime.now()
-        for idx, row in self.df.iterrows():
-            last_listing = row.get("last_listing")
-            last_duration = row.get("last_duration")
-            if pd.notna(last_listing) and pd.notna(last_duration):
-                try:
-                    listing_date = pd.to_datetime(last_listing)
-                    days_passed = (now - listing_date).days
-                    if days_passed > int(last_duration):
-                        # Expiré
-                        self.df.at[idx, "last_listing"] = ""
-                        self.df.at[idx, "last_duration"] = ""
-                        print(f"Listing expiré pour index {idx} (réinitialisé).")
-                except Exception as e:
-                    print(f"Erreur parsing date index {idx}: {e}")
-        self.mark_dirty()
-
-    def get_filtered_tokens(self, filters=None):
-        """Retourne un sous-ensemble du tableau selon des filtres."""
-        if self.df is None:
-            raise ValueError("Aucun fichier chargé.")
-        if not filters:
-            return self.df
-        df_filtered = self.df.copy()
-        for field, condition in filters.items():
-            if field not in self.df.columns:
-                continue
-            df_filtered = df_filtered.query(condition)
-        return df_filtered
+    def save(self):
+        if not self.dirty:
+            print("Aucune modification à sauvegarder.")
+            return
+        self.workbook.save(self.filepath)
+        print(f"Modifications sauvegardées dans {self.filepath}.")
+        self.dirty = False
 
     def is_dirty(self):
-        """Retourne l'état de modification."""
         return self.dirty
