@@ -3,6 +3,8 @@
 import openpyxl
 import os
 from datetime import datetime
+import pandas as pd
+
 
 class ExcelManager:
     def __init__(self, filepath="tokens.xlsx"):
@@ -11,6 +13,7 @@ class ExcelManager:
         self.sheet = None
         self.headers = []
         self.dirty = False
+        self.df = None
 
 
     def load_excel(self):
@@ -25,6 +28,7 @@ class ExcelManager:
 
         self.workbook = openpyxl.load_workbook(self.filepath)
         self.sheet = self.workbook.active
+        self.df = pd.read_excel(self.filepath)
 
         # Normalisation des en-têtes
         self.headers = [
@@ -39,12 +43,13 @@ class ExcelManager:
         return tokens
 
     def update_token_field(self, row_idx, field, value):
+        field = field.strip().lower()
         if field not in self.headers:
             raise ValueError(f"Champ {field} introuvable.")
         col_idx = self.headers.index(field) + 1
-        for row_idx in row_indices:
-            self.sheet.cell(row=row_idx + 2, column=col_idx, value=value)
+        self.sheet.cell(row=row_idx + 2, column=col_idx, value=value)
         self.dirty = True
+
 
     def update_last_scraped(self, row_idx):
         if "last_scraped" not in self.headers:
@@ -64,3 +69,8 @@ class ExcelManager:
 
     def is_dirty(self):
         return self.dirty
+
+    def get_all_data(self):
+        if self.df is None:
+            raise ValueError("Aucun fichier Excel chargé.")
+        return self.df.to_dict(orient="records")
