@@ -26,8 +26,7 @@ class ExcelManager:
             sheet.append(["Name", "Value"])
             workbook.save(self.filepath)
 
-        self.workbook = openpyxl.load_workbook(self.filepath)
-        self.sheet = self.workbook.active
+        # self.sheet = self.workbook.active remplacé par panda
         self.df = pd.read_excel(self.filepath)
 
         # Normalisation des en-têtes
