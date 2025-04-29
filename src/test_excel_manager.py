@@ -8,8 +8,10 @@ def main():
     manager = ExcelManager(filepath)
     
     # Charger
-    print("Chargement du fichier...")
+    print("Chargement du fichier (test excel)...")
     manager.load_excel()
+    
+
     
     # Modifier un token (exemple : première ligne, colonne "QTT owned")
     print("Mise à jour du champ 'qtt_owned' à 5 pour la première ligne.")
@@ -17,7 +19,7 @@ def main():
     
     # Rafraîchir last_scraped sur les 3 premiers tokens
     print("Mise à jour du champ 'last_scraped' pour les 3 premiers tokens.")
-    manager.refresh_last_scraped([0, 1, 2])
+    manager.update_last_scraped([0, 1, 2])
     
     # Vérifier état dirty
     if manager.is_dirty():

@@ -26,16 +26,10 @@ class ExcelManager:
         self.workbook = openpyxl.load_workbook(self.filepath)
         self.sheet = self.workbook.active
 
-
-    def load_excel(self):
-        try:
-            print("Chargement du fichier...")
-            self.workbook = openpyxl.load_workbook(self.filepath)
-            self.sheet = self.workbook.active
-            self.headers = [cell.value for cell in self.sheet[1]]
-            print(f"Chargement réussi ({self.sheet.max_row - 1} lignes).")
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Fichier non trouvé : {self.filepath}")
+        # Normalisation des en-têtes
+        self.headers = [
+            str(cell.value).strip().lower() for cell in self.sheet[1] if cell.value is not None
+        ]
 
     def get_all_tokens(self):
         tokens = []
@@ -48,7 +42,8 @@ class ExcelManager:
         if field not in self.headers:
             raise ValueError(f"Champ {field} introuvable.")
         col_idx = self.headers.index(field) + 1
-        self.sheet.cell(row=row_idx + 2, column=col_idx, value=value)
+        for row_idx in row_indices:
+            self.sheet.cell(row=row_idx + 2, column=col_idx, value=value)
         self.dirty = True
 
     def update_last_scraped(self, row_idx):
