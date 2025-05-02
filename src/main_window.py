@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
 
     def save_data(self):
         # Appel de la méthode save_excel() de excel_manager
+        self.manager.update_from_table(self.table)
         self.manager.save_excel()
         self.label.setText("Données sauvegardées dans tokens.xlsx")
 

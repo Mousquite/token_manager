@@ -59,6 +59,15 @@ class ExcelManager:
         self.sheet.cell(row=row_idx + 2, column=col_idx, value=today)
         self.dirty = True
 
+    def update_from_table(self, table_widget):
+        for row in range(table_widget.rowCount()):
+            for col in range(table_widget.columnCount()):
+                item = table_widget.item(row, col)
+                value = item.text() if item else ""
+                self.sheet.cell(row=row+1, column=col+1, value=value)
+        self.dirty = True
+
+
     def save_excel(self):
        # if not self.dirty:
        #     print("Aucune modification à sauvegarder.")
@@ -66,6 +75,8 @@ class ExcelManager:
         self.workbook.save(self.filepath)
         print(f"Modifications sauvegardées dans {self.filepath}.")
         self.dirty = False
+
+        
 
     def is_dirty(self):
         return self.dirty
