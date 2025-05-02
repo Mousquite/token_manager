@@ -20,15 +20,24 @@ class MainWindow(QMainWindow):
         self.layout = QVBoxLayout()
         self.central_widget.setLayout(self.layout)
 
+                # Création du bouton "Sauvegarder"
+        self.save_button = QPushButton("Sauvegarder")
+        self.save_button.clicked.connect(self.save_data)
+
         self.label = QLabel("Bienvenue dans le gestionnaire de tokens.")
         self.button = QPushButton("Charger les données")
         self.button.clicked.connect(self.load_table)
 
         self.table = QTableWidget()
 
+        # Ajout des elements au layout
         self.layout.addWidget(self.label)
         self.layout.addWidget(self.button)
         self.layout.addWidget(self.table)
+        self.layout.addWidget(self.save_button)
+
+
+        
 
     def load_table(self):
         try:
@@ -51,6 +60,12 @@ class MainWindow(QMainWindow):
             self.label.setText("Données chargées depuis tokens.xlsx")
         except Exception as e:
             QMessageBox.critical(self, "Erreur", str(e))
+
+
+    def save_data(self):
+        # Appel de la méthode save_excel() de excel_manager
+        self.manager.save_excel()
+        self.label.setText("Données sauvegardées dans tokens.xlsx")
 
 
 if __name__ == "__main__":

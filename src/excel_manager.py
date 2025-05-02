@@ -59,10 +59,10 @@ class ExcelManager:
         self.sheet.cell(row=row_idx + 2, column=col_idx, value=today)
         self.dirty = True
 
-    def save(self):
-        if not self.dirty:
-            print("Aucune modification à sauvegarder.")
-            return
+    def save_excel(self):
+       # if not self.dirty:
+       #     print("Aucune modification à sauvegarder.")
+       #     return
         self.workbook.save(self.filepath)
         print(f"Modifications sauvegardées dans {self.filepath}.")
         self.dirty = False
