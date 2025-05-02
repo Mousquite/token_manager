@@ -26,8 +26,9 @@ class ExcelManager:
             sheet.append(["Name", "Value"])
             workbook.save(self.filepath)
 
-        # self.sheet = self.workbook.active remplacé par panda
-        self.df = pd.read_excel(self.filepath)
+        self.workbook = openpyxl.load_workbook(self.filepath)
+        self.sheet = self.workbook.active
+        #self.df = pd.read_excel(self.filepath) equivalent panda non utilisé
 
         # Normalisation des en-têtes
         self.headers = [
@@ -70,6 +71,11 @@ class ExcelManager:
         return self.dirty
 
     def get_all_data(self):
-        if self.df is None:
+        if self.workbook is None:
             raise ValueError("Aucun fichier Excel chargé.")
-        return self.df.to_dict(orient="records")
+        
+        data = []
+        for row in self.sheet.iter_rows(min_row=2, values_only=True):
+            row_dict = {self.headers[i]: row[i] for i in range(len(self.headers))}
+            data.append(row_dict)
+        return data
