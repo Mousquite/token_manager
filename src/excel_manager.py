@@ -64,7 +64,7 @@ class ExcelManager:
             for col in range(table_widget.columnCount()):
                 item = table_widget.item(row, col)
                 value = item.text() if item else ""
-                self.sheet.cell(row=row+1, column=col+1, value=value)
+                self.sheet.cell(row=row+2, column=col+1, value=value)
         self.dirty = True
 
 

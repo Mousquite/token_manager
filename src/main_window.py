@@ -20,6 +20,9 @@ class MainWindow(QMainWindow):
         self.layout = QVBoxLayout()
         self.central_widget.setLayout(self.layout)
 
+
+
+
                 # Création du bouton "Sauvegarder"
         self.save_button = QPushButton("Sauvegarder")
         self.save_button.clicked.connect(self.save_data)
@@ -29,6 +32,10 @@ class MainWindow(QMainWindow):
         self.button.clicked.connect(self.load_table)
 
         self.table = QTableWidget()
+                #gestion en-têtes
+        self.table.setColumnCount(len(self.manager.headers))
+        self.table.setHorizontalHeaderLabels([h.capitalize() for h in self.manager.headers])
+
 
         # Ajout des elements au layout
         self.layout.addWidget(self.label)
