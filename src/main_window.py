@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
 from excel_manager import ExcelManager
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, root, excel_manager):
         super().__init__()
 
         self.setWindowTitle("Token Manager")

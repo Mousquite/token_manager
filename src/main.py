@@ -1,17 +1,24 @@
 # src/main.py
 
+import sys
+from PyQt5.QtWidgets import QApplication
 from excel_manager import ExcelManager
-from gui_manager import GuiManager
+from main_window import MainWindow
 
 def main():
-    # Initialiser Excel Manager
-    excel_manager = ExcelManager()
+    # Initialisation de l'application Qt
+    app = QApplication(sys.argv)
 
-    # Initialiser GUI Manager
-    gui = GuiManager(excel_manager)
-    
-    # Lancer l'application
-    gui.run()
+    # Chargement des données Excel
+    excel_manager = ExcelManager()
+    excel_manager.load_excel()
+
+    # Création et affichage de la fenêtre principale
+    window = MainWindow(None, excel_manager)
+    window.show()
+
+    # Boucle principale Qt
+    sys.exit(app.exec_())
 
 if __name__ == "__main__":
     main()
