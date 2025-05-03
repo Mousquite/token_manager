@@ -1,7 +1,7 @@
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QLabel, QTableWidget, QTableWidgetItem, QMessageBox
+    QLabel, QTableWidget, QTableWidgetItem, QMessageBox, QLineEdit
 )
 from excel_manager import ExcelManager
 
@@ -36,13 +36,17 @@ class MainWindow(QMainWindow):
         self.table.setColumnCount(len(self.manager.headers))
         self.table.setHorizontalHeaderLabels([h.capitalize() for h in self.manager.headers])
 
+        # bouton recherche
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Rechercher...")
+        self.search_input.textChanged.connect(self.filter_table)
 
         # Ajout des elements au layout
         self.layout.addWidget(self.label)
         self.layout.addWidget(self.button)
         self.layout.addWidget(self.table)
         self.layout.addWidget(self.save_button)
-
+        self.layout.addWidget(self.search_input)
 
         
 
@@ -75,6 +79,17 @@ class MainWindow(QMainWindow):
         self.manager.save_excel()
         self.label.setText("Données sauvegardées dans tokens.xlsx")
 
+
+    def filter_table(self, text):
+        text = text.strip().lower()
+        for row in range(self.table.rowCount()):
+            match = False
+            for column in range(self.table.columnCount()):
+                item = self.table.item(row, column)
+                if item and text in item.text().lower():
+                    match = True
+                    break
+            self.table.setRowHidden(row, not match)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
