@@ -60,6 +60,17 @@ class ExcelManager:
         self.dirty = True
 
     def update_from_table(self, table_widget):
+        self.headers = [table_widget.horizontalHeaderItem(col).text() for col in range(table_widget.columnCount())]
+    
+        # Efface la feuille existante
+        self.sheet.delete_cols(1, self.sheet.max_column)
+        self.sheet.delete_rows(1, self.sheet.max_row)
+
+        # Réécrit les en-têtes
+        self.sheet.append(self.headers)
+
+
+        # Réécrit les données ligne par ligne
         for row in range(table_widget.rowCount()):
             for col in range(table_widget.columnCount()):
                 item = table_widget.item(row, col)
