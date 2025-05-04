@@ -1,11 +1,12 @@
 import sys
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QLabel, QTableWidget, QTableWidgetItem, QMessageBox, QLineEdit,
-    QLineEdit, QMenu, QAction, QInputDialog
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton, QShortcut,
+    QLabel, QTableWidget, QTableWidgetItem, QMessageBox,
+    QLineEdit, QMenu, QAction, QInputDialog, QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtCore import Qt, QPoint, QObject, QEvent
 from excel_manager import ExcelManager
+from PyQt5.QtGui import QKeySequence
 
 class MainWindow(QMainWindow):
     def __init__(self, root, excel_manager):
@@ -38,7 +39,21 @@ class MainWindow(QMainWindow):
         self.table.setFocusPolicy(Qt.StrongFocus)
         self.table.setFocus()
 
+        delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.table)
+        delete_shortcut.activated.connect(self.clear_selected_cells)
+
+
         self.table.setSortingEnabled(True) #activer le tri
+
+        # ajout le glisser-deposer des colonnes
+        self.table.setDragEnabled(True)
+        self.table.setAcceptDrops(True)
+        self.table.setDragDropOverwriteMode(False)
+        self.table.setDropIndicatorShown(True)
+        self.table.setDragDropMode(QAbstractItemView.InternalMove)
+        self.table.horizontalHeader().setSectionsMovable(True)
+        self.table.horizontalHeader().setDragEnabled(True)
+        self.table.horizontalHeader().setDragDropMode(QAbstractItemView.InternalMove)
 
                 #gestion en-têtes
         self.table.setColumnCount(len(self.manager.headers))
@@ -112,10 +127,28 @@ class MainWindow(QMainWindow):
     #Méthode pour le menu contextuel du tableau
     def show_table_context_menu(self, pos):
         menu = QMenu(self)
+        
         add_row_action = QAction("Ajouter une ligne", self)
         add_row_action.triggered.connect(self.add_row)
         menu.addAction(add_row_action)
+
+        delete_row_action = QAction("Supprimer la ligne", self)
+        delete_row_action.triggered.connect(self.delete_selected_row)
+        menu.addAction(delete_row_action)
+
+        duplicate_row_action = QAction("Dupliquer la ligne", self)
+        duplicate_row_action.triggered.connect(self.duplicate_selected_row)
+        menu.addAction(duplicate_row_action)
+
+        # supprimer cell par clic droit
+        clear_cells_action = QAction("Effacer les cellules sélectionnées", self)
+        clear_cells_action.triggered.connect(self.clear_selected_cells)
+        menu.addAction(clear_cells_action)
+
+
+        # afficher les menus définis
         menu.exec_(self.table.viewport().mapToGlobal(pos))
+        
 
     # Méthode pour le menu contextuel de l'en-tête
     def show_header_context_menu(self, pos):
@@ -138,12 +171,29 @@ class MainWindow(QMainWindow):
         add_column_action.triggered.connect(self.add_column)
         menu.addAction(add_column_action)
 
-        menu.exec_(self.table.horizontalHeader().viewport().mapToGlobal(pos))
-
+        
         # renommer colonne
         rename_column_action = QAction("Renommer la colonne", self)
-        rename_column_action.triggered.connect(lambda: self.rename_column(logicalIndex))
+        rename_column_action.triggered.connect(lambda: self.rename_column(index))
         menu.addAction(rename_column_action)
+
+        # delete colonne
+        delete_column_action = QAction("Supprimer la colonne", self)
+        delete_column_action.triggered.connect(lambda: self.delete_column(index))
+        menu.addAction(delete_column_action)
+
+
+        # afficher les menu definis
+        menu.exec_(self.table.horizontalHeader().viewport().mapToGlobal(pos))
+
+        
+    def rename_column(self, index):
+        new_name, ok = QInputDialog.getText(self, "Renommer la colonne", "Nouveau nom :")
+        if ok and new_name:
+            self.manager.headers[index] = new_name
+            self.table.setHorizontalHeaderLabels(self.manager.headers)
+
+    
 
 
 
@@ -170,6 +220,42 @@ class MainWindow(QMainWindow):
 
                   self.table.setItem(row, current_column_count, QTableWidgetItem(""))
 
+    def delete_selected_row(self):
+        selected_rows = sorted(set(index.row() for index in self.table.selectedIndexes()), reverse=True)
+        for row in selected_rows:
+            self.table.removeRow(row)
+
+    def delete_column(self, index):
+        self.table.removeColumn(index)
+        if index < len(self.manager.headers):
+            del self.manager.headers[index]
+
+
+    def clear_selected_cells(self):
+        for item in self.table.selectedItems():
+            if item is not None:
+                item.setText("")
+
+    def duplicate_selected_row(self):
+        selected_rows = list(set(index.row() for index in self.table.selectedIndexes()))
+        if not selected_rows:
+            return
+
+        times, ok = QInputDialog.getInt(self, "Dupliquer la ligne", "Combien de fois ?", 1, 1)
+        if ok:
+            for row in selected_rows:
+                row_data = [
+                    self.table.item(row, col).text() if self.table.item(row, col) else ""
+                    for col in range(self.table.columnCount())
+                ]
+                for _ in range(times):
+                    row_position = self.table.rowCount()
+                    self.table.insertRow(row_position)
+                    for col_idx, value in enumerate(row_data):
+                        self.table.setItem(row_position, col_idx, QTableWidgetItem(value))
+
+
+
 
 class TokenTableWidget(QTableWidget):
     def __init__(self, parent=None):
@@ -178,15 +264,15 @@ class TokenTableWidget(QTableWidget):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete:
             for item in self.selectedItems():
-                item.setText("")
+                if item:
+                    item.setText("")
         else:
             super().keyPressEvent(event)
 
 
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = MainWindow()
+    manager = ExcelManager("tokens.xlsx")
+    window = MainWindow(None, manager)
     window.show()
     sys.exit(app.exec_())
