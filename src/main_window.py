@@ -6,46 +6,55 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QPoint, QObject, QEvent
 from excel_manager import ExcelManager
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtGui import QKeySequence, QKeyEvent
 
 class MainWindow(QMainWindow):
     def __init__(self, root, excel_manager):
         super().__init__()
 
+        
+
+        # Fenêtre principale
         self.setWindowTitle("Token Manager")
         self.setGeometry(100, 100, 1200, 600)
 
+        # Gestionnaire Excel
         self.manager = ExcelManager("tokens.xlsx")
 
-        # Interface
+        # Interface centrale
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout()
         self.central_widget.setLayout(self.layout)
 
-
-
-
-                # Création du bouton "Sauvegarder"
-        self.save_button = QPushButton("Sauvegarder")
-        self.save_button.clicked.connect(self.save_data)
-
+        # Widgets de base
         self.label = QLabel("Bienvenue dans le gestionnaire de tokens.")
         self.button = QPushButton("Charger les données")
         self.button.clicked.connect(self.load_table)
+        self.save_button = QPushButton("Sauvegarder")
+        self.save_button.clicked.connect(self.save_data)
+        self.undo_button = QPushButton("Annuler")
+        self.undo_button.clicked.connect(self.undo_last_change)
 
+        # Table principale
         self.table = TokenTableWidget()
-
         self.table.setFocusPolicy(Qt.StrongFocus)
         self.table.setFocus()
+        self.table.setSortingEnabled(True)
+        self.table.itemChanged.connect(self.save_state_for_undo)
 
-        delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.table)
-        delete_shortcut.activated.connect(self.clear_selected_cells)
 
+        # En-têtes de colonnes
+        self.table.setColumnCount(len(self.manager.headers))
+        self.table.setHorizontalHeaderLabels([h.capitalize() for h in self.manager.headers])
 
-        self.table.setSortingEnabled(True) #activer le tri
+        # Menu contextuel (table et en-têtes)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_table_context_menu)
+        self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.horizontalHeader().customContextMenuRequested.connect(self.show_header_context_menu)
 
-        # ajout le glisser-deposer des colonnes
+        # Glisser-déposer des colonnes
         self.table.setDragEnabled(True)
         self.table.setAcceptDrops(True)
         self.table.setDragDropOverwriteMode(False)
@@ -55,34 +64,43 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setDragEnabled(True)
         self.table.horizontalHeader().setDragDropMode(QAbstractItemView.InternalMove)
 
-                #gestion en-têtes
-        self.table.setColumnCount(len(self.manager.headers))
-        self.table.setHorizontalHeaderLabels([h.capitalize() for h in self.manager.headers])
+        # Raccourcis clavier
+        delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.table)
+        delete_shortcut.activated.connect(self.clear_selected_cells)
+        undo_shortcut = QShortcut(QKeySequence.Undo, self)  
+        undo_shortcut.activated.connect(self.undo_last_change)
+        copy_shortcut = QShortcut(QKeySequence.Copy, self.table)
+        copy_shortcut.activated.connect(self.copy_cells)
+        paste_shortcut = QShortcut(QKeySequence.Paste, self.table)
+        paste_shortcut.activated.connect(self.paste_cells)
+        cut_shortcut = QShortcut(QKeySequence.Cut, self.table)
+        cut_shortcut.activated.connect(self.cut_cells)
+        
+        # Pile d'annulation
+        self.undo_stack = []
+        self.loading = False
+        self.table.itemChanged.connect(self.handle_item_changed)
 
-            # ajout des menus contextuels
-        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self.show_table_context_menu)
-
-        self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.horizontalHeader().customContextMenuRequested.connect(self.show_header_context_menu)
-
-
-
-        # bouton recherche
+        # Champ de recherche
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Rechercher...")
         self.search_input.textChanged.connect(self.filter_table)
 
-        # Ajout des elements au layout
+        # Ajout des widgets au layout
         self.layout.addWidget(self.label)
         self.layout.addWidget(self.button)
+        self.layout.addWidget(self.search_input)
         self.layout.addWidget(self.table)
         self.layout.addWidget(self.save_button)
-        self.layout.addWidget(self.search_input)
+        self.layout.addWidget(self.undo_button)
+        
+        
+
 
         
 
     def load_table(self):
+        self.loading = True
         try:
             self.manager.load_excel()
             data = self.manager.get_all_data()
@@ -103,6 +121,8 @@ class MainWindow(QMainWindow):
             self.label.setText("Données chargées depuis tokens.xlsx")
         except Exception as e:
             QMessageBox.critical(self, "Erreur", str(e))
+        self.loading = False
+        self.save_state_for_undo()
 
 
     def save_data(self):
@@ -113,6 +133,7 @@ class MainWindow(QMainWindow):
 
 
     def filter_table(self, text):
+        self.loading = True
         text = text.strip().lower()
         for row in range(self.table.rowCount()):
             match = False
@@ -122,10 +143,12 @@ class MainWindow(QMainWindow):
                     match = True
                     break
             self.table.setRowHidden(row, not match)
+        self.loading = False
 
 
     #Méthode pour le menu contextuel du tableau
     def show_table_context_menu(self, pos):
+        self.loading = True
         menu = QMenu(self)
         
         add_row_action = QAction("Ajouter une ligne", self)
@@ -145,13 +168,27 @@ class MainWindow(QMainWindow):
         clear_cells_action.triggered.connect(self.clear_selected_cells)
         menu.addAction(clear_cells_action)
 
+        # copy cut paste
+        copy_action = QAction("Copier", self)
+        copy_action.triggered.connect(self.copy_cells)
+        menu.addAction(copy_action)
+
+        cut_action = QAction("Couper", self)
+        cut_action.triggered.connect(self.cut_cells)
+        menu.addAction(cut_action)
+
+        paste_action = QAction("Coller", self)
+        paste_action.triggered.connect(self.paste_cells)
+        menu.addAction(paste_action)
+
 
         # afficher les menus définis
         menu.exec_(self.table.viewport().mapToGlobal(pos))
-        
+        self.loading = False
 
     # Méthode pour le menu contextuel de l'en-tête
     def show_header_context_menu(self, pos):
+        self.loading = True
         menu = QMenu(self)
         index = self.table.horizontalHeader().logicalIndexAt(pos)
 
@@ -185,27 +222,34 @@ class MainWindow(QMainWindow):
 
         # afficher les menu definis
         menu.exec_(self.table.horizontalHeader().viewport().mapToGlobal(pos))
-
+        self.loading = False
         
     def rename_column(self, index):
+        self.loading = True
         new_name, ok = QInputDialog.getText(self, "Renommer la colonne", "Nouveau nom :")
         if ok and new_name:
             self.manager.headers[index] = new_name
             self.table.setHorizontalHeaderLabels(self.manager.headers)
+        self.loading = False
+        self.save_state_for_undo()
 
     
 
 
 
     def show_all_columns(self):
+        self.loading = True
         for col in range(self.table.columnCount()):
             self.table.setColumnHidden(col, False)
+        self.loading = False
+        self.save_state_for_undo()
 
     def add_row(self):
         row_position = self.table.rowCount()
         self.table.insertRow(row_position)
         for col in range(self.table.columnCount()):
             self.table.setItem(row_position, col, QTableWidgetItem(""))
+        self.save_state_for_undo()
 
     def add_column(self):
         column_name, ok = QInputDialog.getText(self, "Ajouter une colonne", "Nom de la nouvelle colonne :")
@@ -219,16 +263,19 @@ class MainWindow(QMainWindow):
             for row in range(self.table.rowCount()):
 
                   self.table.setItem(row, current_column_count, QTableWidgetItem(""))
+        self.save_state_for_undo()
 
     def delete_selected_row(self):
         selected_rows = sorted(set(index.row() for index in self.table.selectedIndexes()), reverse=True)
         for row in selected_rows:
             self.table.removeRow(row)
+        self.save_state_for_undo()
 
     def delete_column(self, index):
         self.table.removeColumn(index)
         if index < len(self.manager.headers):
             del self.manager.headers[index]
+        self.save_state_for_undo()
 
 
     def clear_selected_cells(self):
@@ -254,6 +301,94 @@ class MainWindow(QMainWindow):
                     for col_idx, value in enumerate(row_data):
                         self.table.setItem(row_position, col_idx, QTableWidgetItem(value))
 
+    def copy_cells(self):
+        selected = self.table.selectedRanges()
+        if selected:
+            copied_text = ""
+            for r in range(selected[0].topRow(), selected[0].bottomRow() + 1):
+                row_data = []
+                for c in range(selected[0].leftColumn(), selected[0].rightColumn() + 1):
+                    item = self.table.item(r, c)
+                    row_data.append(item.text() if item else "")
+                copied_text += "\t".join(row_data) + "\n"
+            QApplication.clipboard().setText(copied_text)
+        
+
+    def cut_cells(self):
+        self.copy_cells()
+        self.clear_selected_cells()
+        
+
+    def paste_cells(self):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        rows = text.splitlines()
+        selected = self.table.selectedRanges()
+        if not selected:
+            return
+        start_row = selected[0].topRow()
+        start_col = selected[0].leftColumn()
+
+
+        for r, row_text in enumerate(rows):
+            columns = row_text.split("\t")
+            for c, value in enumerate(columns):
+                row_idx = start_row + r
+                col_idx = start_col + c
+                if row_idx < self.table.rowCount() and col_idx < self.table.columnCount():
+                    self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
+
+
+    # stacks pour undo
+    def save_state_for_undo(self):
+        if getattr(self, 'loading', False):
+            return # Ne pas enregistrer l'état si on est en train de charger/modifier par programme
+        
+        state = []
+        for row in range(self.table.rowCount()):
+            row_data = []
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                row_data.append(item.text() if item else "")
+            state.append(row_data)
+        self.last_state = state
+
+        
+        if len(self.undo_stack) > 50: #limite stack à 50 entrées
+            self.undo_stack.pop(0)
+
+        print("État sauvegardé pour annulation.")
+
+
+
+    def handle_item_changed(self, item):
+        if not self.loading:
+            self.save_state_for_undo()
+            
+
+    def undo_last_change(self):
+        if len(self.undo_stack) < 2:
+            print("Aucun état précédent à restaurer.")
+            return
+
+        # Supprimer l'état courant
+        self.undo_stack.pop()
+
+        # Restaurer l'état précédent
+        last_state = self.undo_stack[-1]
+        self.loading = True  # désactiver temporairement save_state_for_undo pendant le remplissage
+        self.table.setRowCount(len(last_state))
+        self.table.setColumnCount(len(last_state[0]))
+
+        for row_idx, row_data in enumerate(last_state):
+            for col_idx, value in enumerate(row_data):
+                self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
+        self.loading = False
+        print("Annulation effectuée.")
+
+
+
+    
 
 
 
@@ -262,12 +397,33 @@ class TokenTableWidget(QTableWidget):
         super().__init__(parent)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Delete:
-            for item in self.selectedItems():
-                if item:
-                    item.setText("")
-        else:
-            super().keyPressEvent(event)
+        self.loading = True
+        print("Key pressed:", event.key())  # <-- Debug
+
+            
+        if isinstance(event, QKeyEvent):
+            # Détection de Meta+Z (Undo sur macOS)
+            if event.key() == QKeySequence.Undo:
+                print("Undo detected via Meta+Z")
+                self.parent().undo_last_change()
+                return
+
+                # Supprimer contenu des cellules
+            elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+                print("Delete key pressed")
+                for item in self.selectedItems():
+                        if item is not None:
+                            item.setText("")
+                return
+
+            else: super().keyPressEvent(event)
+
+        self.loading = False
+
+
+
+
+
 
 
 if __name__ == "__main__":
@@ -276,3 +432,5 @@ if __name__ == "__main__":
     window = MainWindow(None, manager)
     window.show()
     sys.exit(app.exec_())
+
+
