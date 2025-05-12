@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QLabel, QTableWidget, QTableWidgetItem, QMessageBox,
     QLineEdit, QMenu, QAction, QInputDialog, QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QPoint, QObject, QEvent
+from PyQt5.QtCore import Qt, QPoint, QObject, QEvent, QTimer
 from excel_manager import ExcelManager
 from PyQt5.QtGui import QKeySequence, QKeyEvent
 
@@ -12,7 +12,14 @@ class MainWindow(QMainWindow):
     def __init__(self, root, excel_manager):
         super().__init__()
 
-        
+        self.loading = False
+        self.last_saved_state = None
+
+        # Gestion Timer
+        self.undo_timer = QTimer()
+        self.undo_timer.setSingleShot(True)
+        self.undo_timer.timeout.connect(self.save_state_for_undo)
+
 
         # Fenêtre principale
         self.setWindowTitle("Token Manager")
@@ -35,6 +42,13 @@ class MainWindow(QMainWindow):
         self.save_button.clicked.connect(self.save_data)
         self.undo_button = QPushButton("Annuler")
         self.undo_button.clicked.connect(self.undo_last_change)
+        self.redo_button = QPushButton("Refaire")
+        self.redo_button.clicked.connect(self.redo_last_change)
+        #self.update_button = QPushButton("Mettre à jour la base de données")
+        #self.update_button.clicked.connect(self.update_database)
+
+        
+
 
         # Table principale
         self.table = TokenTableWidget()
@@ -55,14 +69,18 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().customContextMenuRequested.connect(self.show_header_context_menu)
 
         # Glisser-déposer des colonnes
-        self.table.setDragEnabled(True)
-        self.table.setAcceptDrops(True)
-        self.table.setDragDropOverwriteMode(False)
-        self.table.setDropIndicatorShown(True)
-        self.table.setDragDropMode(QAbstractItemView.InternalMove)
-        self.table.horizontalHeader().setSectionsMovable(True)
-        self.table.horizontalHeader().setDragEnabled(True)
-        self.table.horizontalHeader().setDragDropMode(QAbstractItemView.InternalMove)
+        self.table.setDragEnabled(False)
+        self.table.setAcceptDrops(False)
+        self.table.setDragDropMode(QAbstractItemView.NoDragDrop)
+
+        #self.table.setDragDropOverwriteMode(False)
+        #self.table.setDropIndicatorShown(True)
+        
+        header = self.table.horizontalHeader()
+        header.setSectionsMovable(True)
+        header.setDragEnabled(True)
+        header.setDragDropMode(QAbstractItemView.InternalMove)
+
 
         # Raccourcis clavier
         delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.table)
@@ -78,8 +96,10 @@ class MainWindow(QMainWindow):
         
         # Pile d'annulation
         self.undo_stack = []
+        self.redo_stack = []
         self.loading = False
         self.table.itemChanged.connect(self.handle_item_changed)
+
 
         # Champ de recherche
         self.search_input = QLineEdit()
@@ -93,7 +113,8 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.table)
         self.layout.addWidget(self.save_button)
         self.layout.addWidget(self.undo_button)
-        
+        self.layout.addWidget(self.redo_button)
+        #self.layout.addWidget(self.update_button)
         
 
 
@@ -339,55 +360,135 @@ class MainWindow(QMainWindow):
                     self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
 
 
+
+    ### LA PARTIE SUIVANTE EST A PEAUFINER
+    ### probleme dans le stack, il faut regrouper les actions dans un seul stack
+    ### pour undo en une action
+
+                    
     # stacks pour undo
     def save_state_for_undo(self):
-        if getattr(self, 'loading', False):
-            return # Ne pas enregistrer l'état si on est en train de charger/modifier par programme
+
+
+        #verif table
+        rows = self.table.rowCount()
+        cols = self.table.columnCount()
+        if rows == 0 or cols == 0:
+            print("Table vide ou non initialisée, état ignoré")
+            return
+
         
+        # Ne pas sauvegarder l'état si on est en train de charger/restaurer
+        if getattr(self, "loading", False):
+            print("État ignoré (chargement ou annulation en cours).")
+            return
+
+        # Capture l'état actuel
         state = []
-        for row in range(self.table.rowCount()):
+        for row in range(rows):
             row_data = []
-            for col in range(self.table.columnCount()):
+            for col in range(cols):
                 item = self.table.item(row, col)
                 row_data.append(item.text() if item else "")
             state.append(row_data)
-        self.last_state = state
 
-        
-        if len(self.undo_stack) > 50: #limite stack à 50 entrées
+        # Ne pas sauvegarder si l'état est identique au dernier
+        if self.undo_stack and self.undo_stack[-1] == state:
+            print("Aucun changement détecté, état non sauvegardé.")
+            return
+
+        # Sauvegarde l'état dans la pile undo
+        self.undo_stack.append(state)
+
+        # Vide la pile redo dès qu'un nouveau changement est fait
+        self.redo_stack.clear()
+
+        # Limite la taille de la pile undo à 50 entrées
+        if len(self.undo_stack) > 50:
             self.undo_stack.pop(0)
 
-        print("État sauvegardé pour annulation.")
+        print(f"État sauvegardé pour annulation. Taille de la pile : {len(self.undo_stack)}")
+
 
 
 
     def handle_item_changed(self, item):
-        if not self.loading:
-            self.save_state_for_undo()
-            
+        if self.loading:
+            return
+        # Lancer le timer ou le redémarrer
+        self.undo_timer.start(200)  # 200ms : regroupe les modifs faites rapidement
 
     def undo_last_change(self):
         if len(self.undo_stack) < 2:
             print("Aucun état précédent à restaurer.")
             return
 
+        print(f"Undo demandé. Taille de la pile avant pop : {len(self.undo_stack)}")
+
+
+        # Sauvegarder l'état courant dans redo_stack
+        current_state = self.undo_stack[-1]
+        if current_state:  # Assure que ce n’est pas None
+            self.redo_stack.append(current_state.copy())
+        else:
+            print("État actuel invalide, non ajouté à redo_stack.")
+
+
+            
+        print("Annulation en cours")
         # Supprimer l'état courant
         self.undo_stack.pop()
+        self.redo_stack.append(current_state)
 
+        
         # Restaurer l'état précédent
         last_state = self.undo_stack[-1]
+
+        
         self.loading = True  # désactiver temporairement save_state_for_undo pendant le remplissage
+        self.table.blockSignals(True) #timer
         self.table.setRowCount(len(last_state))
         self.table.setColumnCount(len(last_state[0]))
 
         for row_idx, row_data in enumerate(last_state):
             for col_idx, value in enumerate(row_data):
                 self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
-        self.loading = False
+        self.table.blockSignals(False) 
+        # self.loading = False
+        QTimer.singleShot(0, lambda: setattr(self, "loading", False))
         print("Annulation effectuée.")
 
+    def redo_last_change(self):
+        if not self.redo_stack:
+            print("Aucun état à refaire.")
+            return
+
+        print(f"Redo demandé. Taille de la pile redo : {len(self.redo_stack)}")
+
+        state_to_restore = self.redo_stack.pop()
+        self.undo_stack.append(state_to_restore)
+
+        self.restore_table_state(state_to_restore)
+        print("Refaire effectué.")
+
+    def restore_table_state(self, state):
+        self.loading = True
+        self.table.blockSignals(True)
+        
+        self.table.setRowCount(len(state))
+        self.table.setColumnCount(len(state[0]))
+
+        for row_idx, row_data in enumerate(state):
+            for col_idx, value in enumerate(row_data):
+                self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
+
+        self.table.blockSignals(False)
+        QTimer.singleShot(0, lambda: setattr(self, "loading", False))
 
 
+### LA PARTIE PRECEDENTE EST A PEAUFINER
+### probleme dans le stack, il faut regrouper les actions dans un seul stack
+### pour undo en une action
     
 
 

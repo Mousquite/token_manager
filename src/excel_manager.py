@@ -23,7 +23,7 @@ class ExcelManager:
             workbook = openpyxl.Workbook()
             sheet = workbook.active
             sheet.title = "Tokens"
-            sheet.append(["Name", "Value"])
+            sheet.append(["contract_address", "token_id"])  # clé minimale
             workbook.save(self.filepath)
 
         self.workbook = openpyxl.load_workbook(self.filepath)
@@ -34,6 +34,23 @@ class ExcelManager:
         self.headers = [
             str(cell.value).strip().lower() for cell in self.sheet[1] if cell.value is not None
         ]
+
+        # Création de self.df à partir de openpyxl
+        data = []
+        for row in self.sheet.iter_rows(min_row=2, values_only=True):
+            data.append(dict(zip(self.headers, row)))
+        self.df = pd.DataFrame(data)
+
+        print("Colonnes chargées :", self.df.columns.tolist())
+        print(f"Fichier chargé avec {len(self.df)} lignes.")
+
+
+
+
+
+
+
+        
 
     def get_all_tokens(self):
         tokens = []
@@ -101,3 +118,78 @@ class ExcelManager:
             row_dict = {self.headers[i]: row[i] for i in range(len(self.headers))}
             data.append(row_dict)
         return data
+
+
+
+    def import_table(self, tnew: pd.DataFrame):
+        if self.df is None:
+            raise ValueError("Aucune table de référence chargée.")
+
+    
+
+        def clean_keys(df):
+            df = df.copy()
+            df["contract_address"] = df["contract_address"].astype(str).str.strip()
+
+            def safe_token_id(x):
+                try:
+                    return str(int(float(x)))
+                except (ValueError, TypeError):
+                    return ""
+
+            df["token_id"] = df["token_id"].apply(safe_token_id)
+            return df
+
+        
+        
+        # Clé d'identification unique
+        def get_key(df):
+            return df["contract_address"].astype(str) + "_" + df["token_id"].astype(str)
+
+
+        t1 = clean_keys(self.df)
+        tnew = clean_keys(tnew)
+
+        # Nettoyage
+        t1 = clean_keys(self.df)
+        tnew = clean_keys(tnew)
+
+        # Clés d'identification
+        t1_keys = get_key(t1)
+        tnew_keys = get_key(tnew)
+
+        # Ajouter les nouvelles colonnes de tnew à t1 si manquantes
+        for col in tnew.columns:
+            if col not in t1.columns:
+                t1[col] = None
+
+        # Ajouter les colonnes manquantes dans tnew pour éviter les erreurs
+        for col in t1.columns:
+            if col not in tnew.columns:
+                tnew[col] = None
+
+        # Créer un dict d’accès rapide à t1
+        t1_index = {key: i for i, key in enumerate(t1_keys)}
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for idx, row in tnew.iterrows():
+            key = f"{row['contract_address']}_{row['token_id']}"
+
+            if key in t1_index:
+                # Mise à jour des champs non vides
+                i = t1_index[key]
+                for col in tnew.columns:
+                    if pd.notna(row[col]) and row[col] != "":
+                        t1.at[i, col] = row[col]
+                t1.at[i, "last_scrape_date"] = now
+            else:
+                # Nouveau token → ajouter une ligne
+                new_row = {col: row[col] if col in row and pd.notna(row[col]) else None for col in t1.columns}
+                new_row["last_scrape_date"] = now
+                new_row_df = pd.DataFrame([new_row], columns=self.df.columns)
+                t1 = pd.concat([t1, new_row_df], ignore_index=True)
+
+        self.df = t1
+
+        
