@@ -6,7 +6,11 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QPoint, QObject, QEvent, QTimer
 from excel_manager import ExcelManager
-from PyQt5.QtGui import QKeySequence, QKeyEvent
+from PyQt5.QtGui import QKeySequence, QKeyEvent, QFont, QColor
+
+import pandas as pd
+import json
+import os
 
 class MainWindow(QMainWindow):
     def __init__(self, root, excel_manager):
@@ -14,12 +18,12 @@ class MainWindow(QMainWindow):
 
         self.loading = False
         self.last_saved_state = None
+        self.locked_cells = set()
 
         # Gestion Timer
         self.undo_timer = QTimer()
         self.undo_timer.setSingleShot(True)
         self.undo_timer.timeout.connect(self.save_state_for_undo)
-
 
         # Fenêtre principale
         self.setWindowTitle("Token Manager")
@@ -37,18 +41,15 @@ class MainWindow(QMainWindow):
         # Widgets de base
         self.label = QLabel("Bienvenue dans le gestionnaire de tokens.")
         self.button = QPushButton("Charger les données")
-        self.button.clicked.connect(self.load_table)
+        self.button.clicked.connect(lambda: self.load_table(from_file=True))
         self.save_button = QPushButton("Sauvegarder")
         self.save_button.clicked.connect(self.save_data)
         self.undo_button = QPushButton("Annuler")
         self.undo_button.clicked.connect(self.undo_last_change)
         self.redo_button = QPushButton("Refaire")
         self.redo_button.clicked.connect(self.redo_last_change)
-        #self.update_button = QPushButton("Mettre à jour la base de données")
-        #self.update_button.clicked.connect(self.update_database)
-
-        
-
+        self.import_button = QPushButton("Importer")
+        self.import_button.clicked.connect(self.import_new_tokens)
 
         # Table principale
         self.table = TokenTableWidget()
@@ -56,7 +57,7 @@ class MainWindow(QMainWindow):
         self.table.setFocus()
         self.table.setSortingEnabled(True)
         self.table.itemChanged.connect(self.save_state_for_undo)
-
+        self.table.itemChanged.connect(self.handle_cell_change)
 
         # En-têtes de colonnes
         self.table.setColumnCount(len(self.manager.headers))
@@ -72,15 +73,10 @@ class MainWindow(QMainWindow):
         self.table.setDragEnabled(False)
         self.table.setAcceptDrops(False)
         self.table.setDragDropMode(QAbstractItemView.NoDragDrop)
-
-        #self.table.setDragDropOverwriteMode(False)
-        #self.table.setDropIndicatorShown(True)
-        
         header = self.table.horizontalHeader()
         header.setSectionsMovable(True)
         header.setDragEnabled(True)
         header.setDragDropMode(QAbstractItemView.InternalMove)
-
 
         # Raccourcis clavier
         delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.table)
@@ -98,8 +94,6 @@ class MainWindow(QMainWindow):
         self.undo_stack = []
         self.redo_stack = []
         self.loading = False
-        self.table.itemChanged.connect(self.handle_item_changed)
-
 
         # Champ de recherche
         self.search_input = QLineEdit()
@@ -114,43 +108,121 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.save_button)
         self.layout.addWidget(self.undo_button)
         self.layout.addWidget(self.redo_button)
-        #self.layout.addWidget(self.update_button)
-        
+        self.layout.addWidget(self.import_button)
+
+        self.load_table_settings()
 
 
-        
-
-    def load_table(self):
+    def load_table(self, from_file: bool = True):
         self.loading = True
         try:
-            self.manager.load_excel()
+            if from_file:
+                print(">>> Chargement des données depuis tokens.xlsx via load_excel()")
+                self.manager.load_excel()
+            else:
+                print(">>> Chargement des données depuis la mémoire (self.manager.df)")
+
             data = self.manager.get_all_data()
             if not data:
                 QMessageBox.information(self, "Info", "Aucune donnée chargée.")
                 return
 
-            headers = list(data[0].keys())
-            self.table.setRowCount(len(data))
+            df = self.manager.df
+            
+            # Vérifie si la colonne "checked" existe, sinon l'ajoute
+            if "checked" not in df.columns:
+                df["checked"] = False
+
+            headers = ["✔"] + list(df.columns)
+            self.table.clear()
+            self.table.setRowCount(0)
             self.table.setColumnCount(len(headers))
             self.table.setHorizontalHeaderLabels(headers)
+            self.table.setRowCount(len(df))
 
-            for row_idx, row in enumerate(data):
-                for col_idx, header in enumerate(headers):
-                    value = str(row[header]) if row[header] is not None else ""
-                    self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
+            for row_idx, (_, row) in enumerate(df.iterrows()):
+                # Checkbox en colonne 0
+                checkbox_item = QTableWidgetItem()
+                checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                checked = row["checked"]
+                checkbox_item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+                self.table.setItem(row_idx, 0, checkbox_item)
+
+                for row_idx, (_, row) in enumerate(self.manager.df.iterrows()):
+                    # Colonne 0 : checkbox
+                    is_checked = row.get("checked", False)
+                    checkbox_item = QTableWidgetItem()
+                    checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                    checkbox_item.setCheckState(Qt.Checked if is_checked else Qt.Unchecked)
+                    self.table.setItem(row_idx, 0, checkbox_item)
+
+                    # Colonne 1... : données
+                    for col_idx, (col_name, value) in enumerate(row.items()):
+                        col_pos = col_idx + 1  # Décalage dû à la colonne checkbox
+
+                        # Skip 'checked' column (déjà gérée)
+                        if col_name == "checked":
+                            continue
+
+                        item = QTableWidgetItem(str(value) if pd.notna(value) else "")
+
+                        # Verrouillage si (row, col) est dans locked_cells
+                        if (row_idx, col_pos) in self.locked_cells:
+                            if not value or str(value).strip() == "":
+                                self.locked_cells.discard((row_idx, col_pos))  # Déverrouille si vide
+                            else:
+                                font = item.font()
+                                font.setBold(True)
+                                item.setFont(font)
+
+                        self.table.setItem(row_idx, col_pos, item)
+
+            # Chargement des cellules verrouillées
+            locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
+            self.locked_cells = set()
+            if os.path.exists(locked_path):
+                with open(locked_path, "r") as f:
+                    loaded = json.load(f)
+                    self.locked_cells = set(tuple(cell) for cell in loaded)
 
             self.label.setText("Données chargées depuis tokens.xlsx")
+
         except Exception as e:
             QMessageBox.critical(self, "Erreur", str(e))
+
+        self.load_table_settings()
         self.loading = False
         self.save_state_for_undo()
 
-
     def save_data(self):
-        # Appel de la méthode save_excel() de excel_manager
-        self.manager.update_from_table(self.table)
+        checked_values = []
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            checked = item.checkState() == Qt.Checked if item else False
+            checked_values.append(checked)
+
+        # Assure que "checked" existe
+        if "checked" not in self.manager.df.columns:
+            self.manager.df.insert(0, "checked", checked_values)
+        else:
+            self.manager.df["checked"] = checked_values
+
+        # Met à jour les autres données (sauf colonne 0)
+        self.update_df_from_table(skip_columns=[0])
+
+        # Sauvegarde du fichier Excel
+        print(">>> Aperçu de self.manager.df avant sauvegarde :")
+        print(self.manager.df.head())
         self.manager.save_excel()
         self.label.setText("Données sauvegardées dans tokens.xlsx")
+
+        # Sauvegarde des cellules verrouillées
+        locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
+        with open(locked_path, "w") as f:
+            json.dump([list(cell) for cell in self.locked_cells], f)
+
+        # Sauvegarde des paramètres de la table
+        self.save_table_settings()
 
 
     def filter_table(self, text):
@@ -165,7 +237,6 @@ class MainWindow(QMainWindow):
                     break
             self.table.setRowHidden(row, not match)
         self.loading = False
-
 
     #Méthode pour le menu contextuel du tableau
     def show_table_context_menu(self, pos):
@@ -202,6 +273,14 @@ class MainWindow(QMainWindow):
         paste_action.triggered.connect(self.paste_cells)
         menu.addAction(paste_action)
 
+          # --- Nouvelles actions : verrouiller / déverrouiller ---
+        lock_action = QAction("Verrouiller la sélection", self)
+        lock_action.triggered.connect(self.lock_selected_cells)
+
+        unlock_action = QAction("Déverrouiller la sélection", self)
+        unlock_action.triggered.connect(self.unlock_selected_cells)
+        menu.addAction(lock_action)
+        menu.addAction(unlock_action)
 
         # afficher les menus définis
         menu.exec_(self.table.viewport().mapToGlobal(pos))
@@ -209,13 +288,18 @@ class MainWindow(QMainWindow):
 
     # Méthode pour le menu contextuel de l'en-tête
     def show_header_context_menu(self, pos):
+        index = self.table.horizontalHeader().logicalIndexAt(pos)
+        if index < 0 or index >= self.table.columnCount():
+            return  # clic hors des colonnes
         self.loading = True
         menu = QMenu(self)
         index = self.table.horizontalHeader().logicalIndexAt(pos)
 
 
         # masquer la colonne
-        hide_column_action = QAction(f"Masquer la colonne '{self.manager.headers[index]}'", self)
+        header_item = self.table.horizontalHeaderItem(index)
+        header_label = header_item.text() if header_item else f"Colonne {index}"
+        hide_column_action = QAction(f"Masquer la colonne '{header_label}'", self)
         hide_column_action.triggered.connect(lambda: self.table.setColumnHidden(index, True))
         menu.addAction(hide_column_action)
 
@@ -253,10 +337,6 @@ class MainWindow(QMainWindow):
             self.table.setHorizontalHeaderLabels(self.manager.headers)
         self.loading = False
         self.save_state_for_undo()
-
-    
-
-
 
     def show_all_columns(self):
         self.loading = True
@@ -298,11 +378,70 @@ class MainWindow(QMainWindow):
             del self.manager.headers[index]
         self.save_state_for_undo()
 
+    def save_table_settings(self, path="table_settings.json"):
+        header = self.table.horizontalHeader()
+        settings = {
+            "column_order": [header.visualIndex(i) for i in range(header.count())],
+            "hidden_columns": [i for i in range(self.table.columnCount()) if self.table.isColumnHidden(i)],
+            "column_widths": {str(i): self.table.columnWidth(i) for i in range(self.table.columnCount())}
+        }
+        with open(path, "w") as f:
+            json.dump(settings, f)    
+    
+    def load_table_settings(self, path="table_settings.json"):
+        try:
+            with open(path, "r") as f:
+                settings = json.load(f)
+
+            header = self.table.horizontalHeader()
+
+            # Ordre des colonnes
+            if "column_order" in settings:
+                for logical, visual in enumerate(settings["column_order"]):
+                    header.moveSection(header.visualIndex(logical), visual)
+
+            # Colonnes masquées
+            if "hidden_columns" in settings:
+                for i in range(self.table.columnCount()):
+                    self.table.setColumnHidden(i, i in settings["hidden_columns"])
+
+            # Largeurs de colonnes
+            if "column_widths" in settings:
+                for i_str, width in settings["column_widths"].items():
+                    i = int(i_str)
+                    self.table.setColumnWidth(i, width)
+
+        except Exception as e:
+            print(f"Erreur lors du chargement des préférences d'affichage : {e}")
+
+    def handle_cell_change(self, item: QTableWidgetItem):
+        if self.loading:
+            return
+
+        row = item.row()
+        col = item.column()
+
+        if (row, col) in self.locked_cells:
+            print(f"[VERROUILLÉ] Cellule ({row}, {col})")
+            old_value = self.manager.df.iat[row, col]
+            self.table.blockSignals(True)
+            item.setText(str(old_value) if pd.notna(old_value) else "")
+            self.table.blockSignals(False)
+            return
+
+        new_value = item.text()
+        self.manager.df.iat[row, col] = new_value
+        print(f"Cellule modifiée : ({row}, {col}) → {new_value}")
 
     def clear_selected_cells(self):
-        for item in self.table.selectedItems():
-            if item is not None:
-                item.setText("")
+         for item in self.table.selectedItems():
+            if item is None:
+                continue
+            row = item.row()
+            col = item.column()
+            if (row, col) in self.table.locked_cells:
+                continue 
+            item.setText("")
 
     def duplicate_selected_row(self):
         selected_rows = list(set(index.row() for index in self.table.selectedIndexes()))
@@ -334,15 +473,16 @@ class MainWindow(QMainWindow):
                 copied_text += "\t".join(row_data) + "\n"
             QApplication.clipboard().setText(copied_text)
         
-
     def cut_cells(self):
         self.copy_cells()
         self.clear_selected_cells()
         
-
     def paste_cells(self):
         clipboard = QApplication.clipboard()
         text = clipboard.text()
+        if not text:
+            return
+    
         rows = text.splitlines()
         selected = self.table.selectedRanges()
         if not selected:
@@ -350,20 +490,84 @@ class MainWindow(QMainWindow):
         start_row = selected[0].topRow()
         start_col = selected[0].leftColumn()
 
-
         for r, row_text in enumerate(rows):
             columns = row_text.split("\t")
             for c, value in enumerate(columns):
                 row_idx = start_row + r
                 col_idx = start_col + c
-                if row_idx < self.table.rowCount() and col_idx < self.table.columnCount():
-                    self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
 
 
+                if row_idx >= self.table.rowCount() and col_idx < self.table.columnCount():
+                    continue
 
+                if (row_idx, col_idx) in self.table.locked_cells:
+                        continue 
+
+                item = QTableWidgetItem(value)
+                self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
+                #self.mark_cell_modified(row_idx, col_idx) 
+
+    def import_new_tokens(self):
+        try:
+            
+            self.update_df_from_table()
+            tnew = pd.read_excel("newtokens.xlsx")
+            self.manager.import_table(tnew)
+            self.load_table(from_file=False)
+            QMessageBox.information(self, "Import réussi", "Les données ont été importées et fusionnées avec succès.")
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur d'import", str(e))
+
+    def lock_selected_cells(self):
+        for item in self.table.selectedIndexes():
+            row, col = item.row(), item.column()
+            self.table.locked_cells.add((row, col))
+            item_widget = self.table.item(row, col)
+            if item_widget:
+                font = item_widget.font()
+                font.setBold(True)
+                item_widget.setFont(font)
+
+    def unlock_selected_cells(self):
+        for item in self.table.selectedIndexes():
+            row, col = item.row(), item.column()
+            self.table.locked_cells.discard((row, col))
+            item_widget = self.table.item(row, col)
+            if item_widget:
+                font = item_widget.font()
+                font.setBold(False)
+                item_widget.setFont(font)
+
+    def load_locked_cells(self):
+        locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
+        if os.path.exists(locked_path):
+            with open(locked_path, "r") as f:
+                loaded = json.load(f)
+                self.locked_cells = set(tuple(cell) for cell in loaded)
+            print(f"🔐 {len(self.locked_cells)} cellules verrouillées chargées.")
+        else:
+            self.locked_cells = set()
+
+    def toggle_check_selection(self, check=True):
+        state = Qt.Checked if check else Qt.Unchecked
+        selected = self.table.selectedRanges()
+        if not selected:
+            return
+
+        for rng in selected:
+            for row in range(rng.topRow(), rng.bottomRow() + 1):
+                item = self.table.item(row, 0)
+                if item is not None:
+                    item.setCheckState(state)
+
+    """def mark_cell_modified(self, row, col):
+        item = self.table.item(row, col)
+        if item:
+            item.setBackground(QColor(255, 255, 200))"""
     ### LA PARTIE SUIVANTE EST A PEAUFINER
     ### probleme dans le stack, il faut regrouper les actions dans un seul stack
     ### pour undo en une action
+    ### il y a aussi des stacks vide wen undo puis redo
 
                     
     # stacks pour undo
@@ -380,7 +584,7 @@ class MainWindow(QMainWindow):
         
         # Ne pas sauvegarder l'état si on est en train de charger/restaurer
         if getattr(self, "loading", False):
-            print("État ignoré (chargement ou annulation en cours).")
+            #print("État ignoré (chargement ou annulation en cours).")
             return
 
         # Capture l'état actuel
@@ -408,15 +612,6 @@ class MainWindow(QMainWindow):
             self.undo_stack.pop(0)
 
         print(f"État sauvegardé pour annulation. Taille de la pile : {len(self.undo_stack)}")
-
-
-
-
-    def handle_item_changed(self, item):
-        if self.loading:
-            return
-        # Lancer le timer ou le redémarrer
-        self.undo_timer.start(200)  # 200ms : regroupe les modifs faites rapidement
 
     def undo_last_change(self):
         if len(self.undo_stack) < 2:
@@ -484,11 +679,28 @@ class MainWindow(QMainWindow):
 
         self.table.blockSignals(False)
         QTimer.singleShot(0, lambda: setattr(self, "loading", False))
+    
 
+    ### LA PARTIE PRECEDENTE EST A PEAUFINER
+    ### probleme dans le stack, il faut regrouper les actions dans un seul stack
+    ### pour undo en une action
 
-### LA PARTIE PRECEDENTE EST A PEAUFINER
-### probleme dans le stack, il faut regrouper les actions dans un seul stack
-### pour undo en une action
+    def update_df_from_table(self, skip_columns: list[int] = []):
+        rows = self.table.rowCount()
+        cols = self.table.columnCount()
+        headers = [self.table.horizontalHeaderItem(i).text() for i in range(cols)]
+
+        data = []
+        for row in range(rows):
+            row_data = {}
+            for col in range(cols):
+                if col in skip_columns:
+                    continue
+                item = self.table.item(row, col)
+                row_data[headers[col]] = item.text() if item else ""
+            data.append(row_data)
+
+        self.manager.df = pd.DataFrame(data)
     
 
 
@@ -496,22 +708,19 @@ class MainWindow(QMainWindow):
 class TokenTableWidget(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.locked_cells = set()  # (row, column) tuples
 
     def keyPressEvent(self, event):
         self.loading = True
-        print("Key pressed:", event.key())  # <-- Debug
-
             
         if isinstance(event, QKeyEvent):
             # Détection de Meta+Z (Undo sur macOS)
             if event.key() == QKeySequence.Undo:
-                print("Undo detected via Meta+Z")
                 self.parent().undo_last_change()
                 return
 
                 # Supprimer contenu des cellules
             elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
-                print("Delete key pressed")
                 for item in self.selectedItems():
                         if item is not None:
                             item.setText("")
@@ -520,7 +729,6 @@ class TokenTableWidget(QTableWidget):
             else: super().keyPressEvent(event)
 
         self.loading = False
-
 
 
 
