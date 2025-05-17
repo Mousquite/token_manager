@@ -107,6 +107,8 @@ class ExcelManager:
         return self.df.fillna("").to_dict(orient="records")
 
     def import_table(self, tnew: pd.DataFrame):
+        print(">>> Colonnes de newtokens.xlsx :", list(tnew.columns))
+
         if self.df is None:
             raise ValueError("Aucune table de référence chargée.")
 
@@ -115,7 +117,6 @@ class ExcelManager:
                 df = df.copy()
 
                 def extract_from_url(url):
-
                     try:
                         parts = url.split('/')
                         chain = parts[4]
@@ -124,13 +125,10 @@ class ExcelManager:
                         return chain, contract_address, token_id
                     except Exception:
                         return None, None, None
-            
 
                 for idx, row in df.iterrows():
                     url = row.get("url")
-                    chain, contract_address, token_id = extract_from_url(url)
-
-                    # Ne pas écraser si extraction échoue
+                    chain, contract_address, token_id = extract_from_url(str(url)) if pd.notna(url) else (None, None, None)
                     if contract_address:
                         df.at[idx, "contract_address"] = contract_address
                     if token_id:
@@ -138,71 +136,75 @@ class ExcelManager:
                     if chain:
                         df.at[idx, "chain"] = chain
 
-                    """if "url" in df.columns:
-                        print("Avant extraction:", df[["url"]].head())
-                        extracted = df["url"].apply(lambda u: extract_from_url(u) if pd.notnull(u) else ("", "", ""))
-                        df["chain"] = extracted.apply(lambda x: x[0])
-                        df["contract_address"] = extracted.apply(lambda x: x[1])
-                        df["token_id"] = extracted.apply(lambda x: x[2])
-                        print("Après extraction:", df[["chain", "contract_address", "token_id"]].head())
-                        """
-                    
                 return df
-            
-            # Clé d'identification unique
+
             def get_key(df):
                 return df["contract_address"].astype(str) + "_" + df["token_id"].astype(str)
 
+            # Nettoyage et normalisation
             t1 = clean_keys(self.df)
             tnew = clean_keys(tnew)
 
-            # Nettoyage
-            t1 = clean_keys(self.df)
-            tnew = clean_keys(tnew)
+            for col in ["✔", "checked", "Unnamed: 0", "Unnamed: 1", "Unnamed: 2",]:
+                if col in tnew.columns:
+                    tnew = tnew.drop(columns=[col])
+                if col in self.df.columns:
+                    self.df = self.df.drop(columns=[col])
+            for col in ["✔"]:
+                if col in t1.columns:
+                    t1 = t1.drop(columns=[col])
+
+            # Supprimer toute colonne "checked" de tnew (ne doit pas être importée)
+            if "checked" in tnew.columns:
+                tnew = tnew.drop(columns=["checked"])
 
             # Clés d'identification
             t1_keys = get_key(t1)
             tnew_keys = get_key(tnew)
 
-            # Ajouter les nouvelles colonnes de tnew à t1 si manquantes
+            # Harmonise les colonnes entre t1 et tnew
             for col in tnew.columns:
                 if col not in t1.columns:
                     t1[col] = None
-
-            # Ajouter les colonnes manquantes dans tnew pour éviter les erreurs
             for col in t1.columns:
                 if col not in tnew.columns:
                     tnew[col] = None
 
-            # Créer un dict d’accès rapide à t1
+            # Index rapide pour mise à jour
             t1_index = {key: i for i, key in enumerate(t1_keys)}
-
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             for idx, row in tnew.iterrows():
                 key = f"{row['contract_address']}_{row['token_id']}"
 
                 if key in t1_index:
-                    # Mise à jour des champs non vides
+                    # Mise à jour : champs non vides + non verrouillés
                     i = t1_index[key]
                     for col in tnew.columns:
                         if pd.notna(row[col]) and row[col] != "":
-                            col_index = self.df.columns.get_loc(col)
-                        if (i, col_index) in self.table.locked_cells:
-                            continue  # Cellule verrouillée → on saute
-                        t1.at[i, col] = row[col]
+                            try:
+                                col_index = self.df.columns.get_loc(col)
+                            except KeyError:
+                                continue  # colonne introuvable (sécurité)
+
+                            # Vérification du verrou (si la table a accès à locked_cells via self.table)
+                            if hasattr(self, "table") and hasattr(self.table, "locked_cells"):
+                                if (i, col_index) in self.table.locked_cells:
+                                    continue
+                            t1.at[i, col] = row[col]
+
                     t1.at[i, "last_scrape_date"] = now
                 else:
-                    # Nouveau token → ajouter une ligne
+                    # Nouveau token → ajout
                     new_row = {col: row.get(col) if pd.notna(row.get(col)) else None for col in t1.columns}
                     new_row["last_scrape_date"] = now
-                    new_row_df = pd.DataFrame([new_row], columns=self.df.columns)
+                    new_row_df = pd.DataFrame([new_row], columns=t1.columns)
                     t1 = pd.concat([t1, new_row_df], ignore_index=True)
 
             self.df = t1
+            print(">>> fin de l'importation succès")
+            print(">>> Colonnes actuelles après import :", list(self.df.columns))
 
-            print(">>> fin de l'importation succés")
-            
+
         except Exception as e:
             print(">>> Erreur dans import_table :", e)
-        

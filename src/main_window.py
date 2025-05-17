@@ -128,12 +128,22 @@ class MainWindow(QMainWindow):
                 return
 
             df = self.manager.df
-            
-            # Vérifie si la colonne "checked" existe, sinon l'ajoute
+
+            # Supprime toute colonne 'checked' déjà présente (on la gère via la table uniquement)
+            if "checked" in df.columns:
+                df.drop(columns=["checked"], inplace=True)
+
+            # Chargement ou création de la colonne temporaire "checked" pour l'affichage
+            checked_values = [False] * len(df)
+            if hasattr(self, 'locked_cells'):  # pour s'assurer que locked_cells existe
+                self.locked_cells = set()
+
             if "checked" not in df.columns:
                 df["checked"] = False
 
-            headers = ["✔"] + list(df.columns)
+            headers = ["✔"] + [col for col in df.columns if col != "checked"]
+
+            # Initialisation de la table
             self.table.clear()
             self.table.setRowCount(0)
             self.table.setColumnCount(len(headers))
@@ -141,41 +151,30 @@ class MainWindow(QMainWindow):
             self.table.setRowCount(len(df))
 
             for row_idx, (_, row) in enumerate(df.iterrows()):
-                # Checkbox en colonne 0
+                # Colonne 0 : checkbox
                 checkbox_item = QTableWidgetItem()
                 checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-                checked = row["checked"]
+                checked = row.get("checked", False) if "checked" in row else False
                 checkbox_item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
                 self.table.setItem(row_idx, 0, checkbox_item)
 
-                for row_idx, (_, row) in enumerate(self.manager.df.iterrows()):
-                    # Colonne 0 : checkbox
-                    is_checked = row.get("checked", False)
-                    checkbox_item = QTableWidgetItem()
-                    checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-                    checkbox_item.setCheckState(Qt.Checked if is_checked else Qt.Unchecked)
-                    self.table.setItem(row_idx, 0, checkbox_item)
+                # Autres colonnes
+                for col_idx, (col_name, value) in enumerate(row.items()):
+                    if col_name == "checked":
+                        continue  # déjà traité
 
-                    # Colonne 1... : données
-                    for col_idx, (col_name, value) in enumerate(row.items()):
-                        col_pos = col_idx + 1  # Décalage dû à la colonne checkbox
+                    item = QTableWidgetItem(str(value) if pd.notna(value) else "")
+                    col_pos = col_idx + 1  # +1 car colonne 0 = checkbox
 
-                        # Skip 'checked' column (déjà gérée)
-                        if col_name == "checked":
-                            continue
+                    if (row_idx, col_pos) in self.locked_cells:
+                        if not value or str(value).strip() == "":
+                            self.locked_cells.discard((row_idx, col_pos))
+                        else:
+                            font = item.font()
+                            font.setBold(True)
+                            item.setFont(font)
 
-                        item = QTableWidgetItem(str(value) if pd.notna(value) else "")
-
-                        # Verrouillage si (row, col) est dans locked_cells
-                        if (row_idx, col_pos) in self.locked_cells:
-                            if not value or str(value).strip() == "":
-                                self.locked_cells.discard((row_idx, col_pos))  # Déverrouille si vide
-                            else:
-                                font = item.font()
-                                font.setBold(True)
-                                item.setFont(font)
-
-                        self.table.setItem(row_idx, col_pos, item)
+                    self.table.setItem(row_idx, col_pos, item)
 
             # Chargement des cellules verrouillées
             locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
@@ -191,39 +190,34 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erreur", str(e))
 
         self.load_table_settings()
+        self.load_locked_cells()
+        self.apply_checked_column()
         self.loading = False
         self.save_state_for_undo()
 
+        # Appliquer les styles aux cellules verrouillées
+        for (row, col) in self.locked_cells:
+            item = self.table.item(row, col)
+            if item:
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+
+
+
+
     def save_data(self):
-        checked_values = []
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            checked = item.checkState() == Qt.Checked if item else False
-            checked_values.append(checked)
-
-        # Assure que "checked" existe
-        if "checked" not in self.manager.df.columns:
-            self.manager.df.insert(0, "checked", checked_values)
-        else:
-            self.manager.df["checked"] = checked_values
-
-        # Met à jour les autres données (sauf colonne 0)
-        self.update_df_from_table(skip_columns=[0])
-
-        # Sauvegarde du fichier Excel
-        print(">>> Aperçu de self.manager.df avant sauvegarde :")
-        print(self.manager.df.head())
+        self.update_df_from_table(skip_columns=[0])  # Exclure la colonne des cases à cocher
+        self.sync_checked_column()
         self.manager.save_excel()
         self.label.setText("Données sauvegardées dans tokens.xlsx")
 
         # Sauvegarde des cellules verrouillées
         locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
         with open(locked_path, "w") as f:
-            json.dump([list(cell) for cell in self.locked_cells], f)
+            json.dump(list(self.locked_cells), f)
 
-        # Sauvegarde des paramètres de la table
         self.save_table_settings()
-
 
     def filter_table(self, text):
         self.loading = True
@@ -345,11 +339,32 @@ class MainWindow(QMainWindow):
         self.loading = False
         self.save_state_for_undo()
 
+    def sync_checked_column(self):
+        checked_values = []
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            checked = item.checkState() == Qt.Checked if item else False
+            checked_values.append(checked)
+
+        if "checked" in self.manager.df.columns:
+            self.manager.df["checked"] = checked_values
+        else:
+            self.manager.df.insert(0, "checked", checked_values)
+
+    def apply_checked_column(self):
+        if "checked" in self.manager.df.columns:
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, 0)
+                if item:
+                    state = Qt.Checked if self.manager.df.at[row, "checked"] else Qt.Unchecked
+                    item.setCheckState(state)
+
     def add_row(self):
         row_position = self.table.rowCount()
         self.table.insertRow(row_position)
         for col in range(self.table.columnCount()):
             self.table.setItem(row_position, col, QTableWidgetItem(""))
+        self.update_df_from_table(skip_columns=[0])
         self.save_state_for_undo()
 
     def add_column(self):
@@ -512,6 +527,11 @@ class MainWindow(QMainWindow):
             
             self.update_df_from_table()
             tnew = pd.read_excel("newtokens.xlsx")
+
+            # On nettoie préventivement "checked" si elle est là
+            if "checked" in tnew.columns:
+                tnew = tnew.drop(columns=["checked"])
+
             self.manager.import_table(tnew)
             self.load_table(from_file=False)
             QMessageBox.information(self, "Import réussi", "Les données ont été importées et fusionnées avec succès.")
@@ -521,7 +541,7 @@ class MainWindow(QMainWindow):
     def lock_selected_cells(self):
         for item in self.table.selectedIndexes():
             row, col = item.row(), item.column()
-            self.table.locked_cells.add((row, col))
+            self.locked_cells.add((row, col))  # corrigé ici
             item_widget = self.table.item(row, col)
             if item_widget:
                 font = item_widget.font()
@@ -531,12 +551,13 @@ class MainWindow(QMainWindow):
     def unlock_selected_cells(self):
         for item in self.table.selectedIndexes():
             row, col = item.row(), item.column()
-            self.table.locked_cells.discard((row, col))
+            self.locked_cells.discard((row, col))  # corrigé ici
             item_widget = self.table.item(row, col)
             if item_widget:
                 font = item_widget.font()
                 font.setBold(False)
                 item_widget.setFont(font)
+
 
     def load_locked_cells(self):
         locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
@@ -559,6 +580,7 @@ class MainWindow(QMainWindow):
                 item = self.table.item(row, 0)
                 if item is not None:
                     item.setCheckState(state)
+        
 
     """def mark_cell_modified(self, row, col):
         item = self.table.item(row, col)
@@ -568,7 +590,6 @@ class MainWindow(QMainWindow):
     ### probleme dans le stack, il faut regrouper les actions dans un seul stack
     ### pour undo en une action
     ### il y a aussi des stacks vide wen undo puis redo
-
                     
     # stacks pour undo
     def save_state_for_undo(self):
@@ -680,7 +701,6 @@ class MainWindow(QMainWindow):
         self.table.blockSignals(False)
         QTimer.singleShot(0, lambda: setattr(self, "loading", False))
     
-
     ### LA PARTIE PRECEDENTE EST A PEAUFINER
     ### probleme dans le stack, il faut regrouper les actions dans un seul stack
     ### pour undo en une action
@@ -701,7 +721,8 @@ class MainWindow(QMainWindow):
             data.append(row_data)
 
         self.manager.df = pd.DataFrame(data)
-    
+
+
 
 
 
