@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
                 font = item.font()
                 font.setBold(True)
                 item.setFont(font)
+                item.setBackground(QColor(80, 80, 80))
 
 
 
@@ -430,14 +431,14 @@ class MainWindow(QMainWindow):
             print(f"Erreur lors du chargement des préférences d'affichage : {e}")
 
     def handle_cell_change(self, item: QTableWidgetItem):
-        if self.loading:
+        if self.loading or not item:
             return
 
         row = item.row()
         col = item.column()
 
         if (row, col) in self.locked_cells:
-            print(f"[VERROUILLÉ] Cellule ({row}, {col})")
+            print(f"[🔒 VERROUILLÉ] Cellule ({row}, {col}) → modification annulée.")
             old_value = self.manager.df.iat[row, col]
             self.table.blockSignals(True)
             item.setText(str(old_value) if pd.notna(old_value) else "")
@@ -445,9 +446,16 @@ class MainWindow(QMainWindow):
             return
 
         new_value = item.text()
-        self.manager.df.iat[row, col] = new_value
-        print(f"Cellule modifiée : ({row}, {col}) → {new_value}")
+        old_value = self.manager.df.iat[row, col]
 
+        if pd.isna(old_value):
+            old_value = ""
+
+        if new_value != str(old_value):
+            self.manager.df.iat[row, col] = new_value
+            print(f"📝 Cellule modifiée : ({row}, {col}) « {old_value} » → « {new_value} »")
+            self.save_state_for_undo()
+    
     def clear_selected_cells(self):
          for item in self.table.selectedItems():
             if item is None:
@@ -547,6 +555,7 @@ class MainWindow(QMainWindow):
                 font = item_widget.font()
                 font.setBold(True)
                 item_widget.setFont(font)
+                item_widget.setBackground(QColor(80, 80, 80))  
 
     def unlock_selected_cells(self):
         for item in self.table.selectedIndexes():
@@ -557,6 +566,7 @@ class MainWindow(QMainWindow):
                 font = item_widget.font()
                 font.setBold(False)
                 item_widget.setFont(font)
+                item_widget.setBackground(QColor(0, 0, 0))  
 
 
     def load_locked_cells(self):
