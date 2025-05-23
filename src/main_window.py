@@ -248,6 +248,15 @@ class MainWindow(QMainWindow):
             print("❌ Aucune donnée chargée, sauvegarde annulée.")
             return
 
+        try:
+            print("🛠 Extraction depuis la table...")
+            self.table.update_df_from_table(skip_columns=[0])
+            print("💾 Écriture dans Excel...")
+            self.manager.save_to_file()
+            print("✅ Sauvegarde terminée.")
+        except Exception as e:
+            print(f"❌ ERREUR pendant la sauvegarde : {e}")
+
         # Capture avant
         df_before = self.manager.df.copy(deep=True)
 
@@ -257,7 +266,7 @@ class MainWindow(QMainWindow):
             json.dump(list(self.locked_cells), f)
 
         # Mise à jour du DataFrame depuis la table (hors colonne des cases)
-        self.update_df_from_table(skip_columns=[0])
+        self.table.update_df_from_table(skip_columns=[0])
         self.sync_checked_column()
 
         # Sauvegarde Excel
@@ -581,15 +590,19 @@ class MainWindow(QMainWindow):
             for c, value in enumerate(columns):
                 row_idx = start_row + r
                 col_idx = start_col + c
+                
+
 
                 if row_idx >= self.table.rowCount() or col_idx >= self.table.columnCount():
+                    print(f"📋 Collage {value} dans ({row_idx}, {col_idx})")
                     continue
 
                 model_col_idx = col_idx - 1  # car col=0 = checkbox
                 if (row_idx, model_col_idx) in self.table.locked_cells:
                     print(f"[🔒 VERROUILLÉ] Cellule ({row_idx}, {model_col_idx}) → collage annulé.")
+                    self.table.apply_lock_style(row_idx, col_idx)
                     continue
-
+                
                 item = QTableWidgetItem(value)
                 self.table.setItem(row_idx, col_idx, item)
                 # self.mark_cell_modified(row_idx, col_idx)  # si tu veux remettre ce tracking
@@ -781,30 +794,8 @@ class MainWindow(QMainWindow):
     ### probleme dans le stack, il faut regrouper les actions dans un seul stack
     ### pour undo en une action
 
-    def update_df_from_table(self, skip_columns=None):
-        if self.manager.df is None:
-            return
-
-        if skip_columns is None:
-            skip_columns = []
-
-        for row in range(self.rowCount()):
-            for col in range(1, self.columnCount()):  # col=0 = checkbox
-                model_col = col - 1  # Décalage : DataFrame n’a pas la checkbox
-
-                if col in skip_columns:
-                    continue
-                if (row, model_col) in self.locked_cells:
-                    print(f"🔒 [SKIP] Cellule verrouillée ignorée ({row}, {model_col})")
-                    continue
-
-                item = self.item(row, col)
-                value = item.text() if item else None
-                value = value if value != "" else None
-                self.manager.df.iat[row, model_col] = value
-
-        print("🟡 Données extraites de la table vers manager.df (hors cases cochées) :")
-        print(self.manager.df.head(10).to_string())
+  
+        
 
 
 
@@ -838,7 +829,32 @@ class TokenTableWidget(QTableWidget):
 
         self.loading = False
 
+    def update_df_from_table(self, skip_columns=None):
+        print(f"📊 Début update_df_from_table : {self.rowCount()} lignes, {self.columnCount()} colonnes")
 
+        if self.manager.df is None:
+            return
+
+        if skip_columns is None:
+            skip_columns = []
+
+        for row in range(self.rowCount()):
+            for col in range(1, self.columnCount()):  # col=0 = checkbox
+                model_col = col - 1  # Décalage : DataFrame n’a pas la checkbox
+
+                if col in skip_columns:
+                    continue
+                if (row, model_col) in self.locked_cells:
+                    print(f"🔒 [SKIP] Cellule verrouillée ignorée ({row}, {model_col})")
+                    continue
+
+                item = self.item(row, col)
+                value = item.text() if item else None
+                value = value if value != "" else None
+                self.manager.df.iat[row, model_col] = value
+
+        print("🟡 Données extraites de la table vers manager.df (hors cases cochées) :")
+        print(self.manager.df.head(10).to_string())
 
 
 
