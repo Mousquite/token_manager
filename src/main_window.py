@@ -244,6 +244,10 @@ class MainWindow(QMainWindow):
     def save_data(self):
         print("🔽 Sauvegarde en cours...")
 
+        if self.manager.df is None:
+            print("❌ Aucune donnée chargée, sauvegarde annulée.")
+            return
+
         # Capture avant
         df_before = self.manager.df.copy(deep=True)
 
@@ -563,11 +567,12 @@ class MainWindow(QMainWindow):
         text = clipboard.text()
         if not text:
             return
-    
+
         rows = text.splitlines()
         selected = self.table.selectedRanges()
         if not selected:
             return
+
         start_row = selected[0].topRow()
         start_col = selected[0].leftColumn()
 
@@ -577,16 +582,18 @@ class MainWindow(QMainWindow):
                 row_idx = start_row + r
                 col_idx = start_col + c
 
-
-                if row_idx >= self.table.rowCount() and col_idx < self.table.columnCount():
+                if row_idx >= self.table.rowCount() or col_idx >= self.table.columnCount():
                     continue
 
-                if (row_idx, col_idx) in self.table.locked_cells:
-                        continue 
+                model_col_idx = col_idx - 1  # car col=0 = checkbox
+                if (row_idx, model_col_idx) in self.table.locked_cells:
+                    print(f"[🔒 VERROUILLÉ] Cellule ({row_idx}, {model_col_idx}) → collage annulé.")
+                    continue
 
                 item = QTableWidgetItem(value)
-                self.table.setItem(row_idx, col_idx, QTableWidgetItem(value))
-                #self.mark_cell_modified(row_idx, col_idx) 
+                self.table.setItem(row_idx, col_idx, item)
+                # self.mark_cell_modified(row_idx, col_idx)  # si tu veux remettre ce tracking
+
 
     def import_new_tokens(self):
         try:
@@ -775,7 +782,7 @@ class MainWindow(QMainWindow):
     ### pour undo en une action
 
     def update_df_from_table(self, skip_columns=None):
-        if self.df is None:
+        if self.manager.df is None:
             return
 
         if skip_columns is None:
@@ -794,10 +801,11 @@ class MainWindow(QMainWindow):
                 item = self.item(row, col)
                 value = item.text() if item else None
                 value = value if value != "" else None
-                self.df.iat[row, model_col] = value
+                self.manager.df.iat[row, model_col] = value
 
-        print("🟡 Données extraites de la table vers df (sans les cases cochées) :")
-        print(self.df.head(10).to_string())
+        print("🟡 Données extraites de la table vers manager.df (hors cases cochées) :")
+        print(self.manager.df.head(10).to_string())
+
 
 
 
