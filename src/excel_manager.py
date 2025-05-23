@@ -41,6 +41,7 @@ class ExcelManager:
         self.df = pd.DataFrame(data)
 
         print(f"Fichier chargé avec {len(self.df)} lignes.")
+        
 
     def get_all_tokens(self):
         tokens = []
@@ -85,18 +86,17 @@ class ExcelManager:
         self.dirty = True
 
     def save_excel(self):
-        from openpyxl import Workbook
-        from openpyxl.utils.dataframe import dataframe_to_rows
+        df_to_save = self.df.copy()
+        df_to_save = df_to_save.fillna("")
+        
+        # Supprime la colonne 'checked' si elle existe
+        if "checked" in df_to_save.columns:
+            df_to_save.drop(columns=["checked"], inplace=True)
 
-        wb = Workbook()
-        ws = wb.active
-
-        for r in dataframe_to_rows(self.df, index=False, header=True):
-            ws.append(r)
-
-        wb.save(self.filepath)
+        df_to_save.to_excel(self.filepath, index=False)
         print(f"Modifications sauvegardées dans {self.filepath}.")
         self.dirty = False
+
 
     def is_dirty(self):
         return self.dirty

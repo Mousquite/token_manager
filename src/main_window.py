@@ -11,6 +11,38 @@ from PyQt5.QtGui import QKeySequence, QKeyEvent, QFont, QColor
 import pandas as pd
 import json
 import os
+import hashlib
+
+def hash_df(df):
+        return hashlib.md5(pd.util.hash_pandas_object(df, index=True).values).hexdigest()
+
+def compare_dfs(df1, df2):
+
+    diffs = []
+    rows = max(len(df1), len(df2))
+    cols = set(df1.columns).union(set(df2.columns))
+
+    for i in range(rows):
+        for col in cols:
+            val1 = df1[col][i] if i < len(df1) and col in df1.columns else "<missing>"
+            val2 = df2[col][i] if i < len(df2) and col in df2.columns else "<missing>"
+            if str(val1) != str(val2):
+                diffs.append(f"🟥 Diff ligne {i}, colonne '{col}': '{val1}' -> '{val2}'")
+    return diffs
+
+def log_df_differences(df_before: pd.DataFrame, df_after: pd.DataFrame, locked_cells: set):
+    for row in range(min(len(df_before), len(df_after))):
+        for col in range(min(len(df_before.columns), len(df_after.columns))):
+            val_before = df_before.iat[row, col]
+            val_after = df_after.iat[row, col]
+            if pd.isna(val_before): val_before = ""
+            if pd.isna(val_after): val_after = ""
+            if str(val_before) != str(val_after):
+                col_name = df_before.columns[col]
+                is_locked = (row, col) in locked_cells
+                status = "🔒" if is_locked else "⚠️"
+                print(f"{status} Diff (row={row}, col={col}, '{col_name}') : '{val_before}' → '{val_after}'")
+
 
 class MainWindow(QMainWindow):
     def __init__(self, root, excel_manager):
@@ -19,6 +51,7 @@ class MainWindow(QMainWindow):
         self.loading = False
         self.last_saved_state = None
         self.locked_cells = set()
+
 
         # Gestion Timer
         self.undo_timer = QTimer()
@@ -112,13 +145,14 @@ class MainWindow(QMainWindow):
 
         self.load_table_settings()
 
-
     def load_table(self, from_file: bool = True):
         self.loading = True
         try:
             if from_file:
                 print(">>> Chargement des données depuis tokens.xlsx via load_excel()")
                 self.manager.load_excel()
+                print("🟢 Données chargées depuis le fichier :")
+                print(self.manager.df.head(10).to_string()) 
             else:
                 print(">>> Chargement des données depuis la mémoire (self.manager.df)")
 
@@ -204,21 +238,44 @@ class MainWindow(QMainWindow):
                 item.setFont(font)
                 item.setBackground(QColor(80, 80, 80))
 
-
-
+        print("🟡 Données extraites de la table vers df (sans les cases cochées) :")
+        print(self.manager.df.head(10).to_string())
 
     def save_data(self):
-        self.update_df_from_table(skip_columns=[0])  # Exclure la colonne des cases à cocher
-        self.sync_checked_column()
-        self.manager.save_excel()
-        self.label.setText("Données sauvegardées dans tokens.xlsx")
+        print("🔽 Sauvegarde en cours...")
 
-        # Sauvegarde des cellules verrouillées
+        # Capture avant
+        df_before = self.manager.df.copy(deep=True)
+
+        # Sauvegarde JSON verrou
         locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
         with open(locked_path, "w") as f:
             json.dump(list(self.locked_cells), f)
 
-        self.save_table_settings()
+        # Mise à jour du DataFrame depuis la table (hors colonne des cases)
+        self.update_df_from_table(skip_columns=[0])
+        self.sync_checked_column()
+
+        # Sauvegarde Excel
+        self.manager.save_excel()
+
+        # Rechargement du fichier
+        self.manager.load_excel()
+        df_after = self.manager.df.copy(deep=True)
+
+        # Rechargement dans la table
+        self.load_table()
+
+        # Logs de différence
+        hash_before = hash_df(df_before)
+        hash_after = hash_df(df_after)
+        print(f"✅ Hash DF avant save: {hash_before}")
+        print(f"✅ Hash DF après save: {hash_after}")
+        if hash_before != hash_after:
+            print("❌ Le DataFrame a changé pendant la sauvegarde")
+            log_df_differences(df_before, df_after, self.locked_cells)
+        else:
+            print("✅ Aucune différence détectée dans le DataFrame.")
 
     def filter_table(self, text):
         self.loading = True
@@ -455,6 +512,7 @@ class MainWindow(QMainWindow):
             self.manager.df.iat[row, col] = new_value
             print(f"📝 Cellule modifiée : ({row}, {col}) « {old_value} » → « {new_value} »")
             self.save_state_for_undo()
+
     
     def clear_selected_cells(self):
          for item in self.table.selectedItems():
@@ -568,13 +626,15 @@ class MainWindow(QMainWindow):
                 item_widget.setFont(font)
                 item_widget.setBackground(QColor(0, 0, 0))  
 
-
     def load_locked_cells(self):
         locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
         if os.path.exists(locked_path):
             with open(locked_path, "r") as f:
                 loaded = json.load(f)
-                self.locked_cells = set(tuple(cell) for cell in loaded)
+                self.locked_cells = set()
+                for row, col in loaded:
+                    if row < self.table.rowCount() and col < self.table.columnCount():
+                        self.locked_cells.add((row, col))
             print(f"🔐 {len(self.locked_cells)} cellules verrouillées chargées.")
         else:
             self.locked_cells = set()
@@ -591,7 +651,7 @@ class MainWindow(QMainWindow):
                 if item is not None:
                     item.setCheckState(state)
         
-
+   
     """def mark_cell_modified(self, row, col):
         item = self.table.item(row, col)
         if item:
@@ -615,7 +675,6 @@ class MainWindow(QMainWindow):
         
         # Ne pas sauvegarder l'état si on est en train de charger/restaurer
         if getattr(self, "loading", False):
-            #print("État ignoré (chargement ou annulation en cours).")
             return
 
         # Capture l'état actuel
@@ -715,22 +774,32 @@ class MainWindow(QMainWindow):
     ### probleme dans le stack, il faut regrouper les actions dans un seul stack
     ### pour undo en une action
 
-    def update_df_from_table(self, skip_columns: list[int] = []):
-        rows = self.table.rowCount()
-        cols = self.table.columnCount()
-        headers = [self.table.horizontalHeaderItem(i).text() for i in range(cols)]
+    def update_df_from_table(self, skip_columns=None):
+        if self.df is None:
+            return
 
-        data = []
-        for row in range(rows):
-            row_data = {}
-            for col in range(cols):
+        if skip_columns is None:
+            skip_columns = []
+
+        for row in range(self.rowCount()):
+            for col in range(1, self.columnCount()):  # col=0 = checkbox
+                model_col = col - 1  # Décalage : DataFrame n’a pas la checkbox
+
                 if col in skip_columns:
                     continue
-                item = self.table.item(row, col)
-                row_data[headers[col]] = item.text() if item else ""
-            data.append(row_data)
+                if (row, model_col) in self.locked_cells:
+                    print(f"🔒 [SKIP] Cellule verrouillée ignorée ({row}, {model_col})")
+                    continue
 
-        self.manager.df = pd.DataFrame(data)
+                item = self.item(row, col)
+                value = item.text() if item else None
+                value = value if value != "" else None
+                self.df.iat[row, model_col] = value
+
+        print("🟡 Données extraites de la table vers df (sans les cases cochées) :")
+        print(self.df.head(10).to_string())
+
+
 
 
 
