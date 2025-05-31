@@ -863,5 +863,3 @@ if __name__ == "__main__":
     window = MainWindow(None, manager)
     window.show()
     sys.exit(app.exec_())
-
-
