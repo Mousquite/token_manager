@@ -261,9 +261,7 @@ class MainWindow(QMainWindow):
             self.manager.save_excel()  # Utilise la méthode correcte pour sauvegarder
             self.statusBar().showMessage("Fichier sauvegardé.", 5000)  # Affiche un message de confirmation
             logger.info("✅ Fichier sauvegardé avec succès.")
-            #self.modified_cells.clear()
             self.unsaved_changes = False
-            #self.refresh_cell_styles()
 
         except Exception as e:
             logger.error(f"❌ ERREUR pendant la sauvegarde : {e}")
