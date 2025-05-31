@@ -11,7 +11,13 @@ from PyQt5.QtGui import QKeySequence, QKeyEvent, QFont, QColor
 import pandas as pd
 import json
 import os
+import traceback
+from logger import logger 
 import hashlib
+import logging
+
+
+DEBUG_MODE = True
 
 def hash_df(df):
         return hashlib.md5(pd.util.hash_pandas_object(df, index=True).values).hexdigest()
@@ -145,6 +151,7 @@ class MainWindow(QMainWindow):
 
         self.load_table_settings()
 
+
     def load_table(self, from_file: bool = True):
         self.loading = True
         try:
@@ -242,53 +249,28 @@ class MainWindow(QMainWindow):
         print(self.manager.df.head(10).to_string())
 
     def save_data(self):
-        print("🔽 Sauvegarde en cours...")
-
-        if self.manager.df is None:
-            print("❌ Aucune donnée chargée, sauvegarde annulée.")
+        if not self.manager:
+            logger.warning("Aucun fichier chargé, sauvegarde annulée.")
             return
 
+        logger.info("🔽 Sauvegarde en cours...")
+
         try:
-            print("🛠 Extraction depuis la table...")
             self.table.update_df_from_table(skip_columns=[0])
-            print("💾 Écriture dans Excel...")
-            self.manager.save_to_file()
-            print("✅ Sauvegarde terminée.")
+
+            self.manager.save_excel()  # Utilise la méthode correcte pour sauvegarder
+            self.statusBar().showMessage("Fichier sauvegardé.", 5000)  # Affiche un message de confirmation
+            logger.info("✅ Fichier sauvegardé avec succès.")
+            #self.modified_cells.clear()
+            self.unsaved_changes = False
+            #self.refresh_cell_styles()
+
         except Exception as e:
-            print(f"❌ ERREUR pendant la sauvegarde : {e}")
+            logger.error(f"❌ ERREUR pendant la sauvegarde : {e}")
+            logger.error(traceback.format_exc())
+            self.statusBar().showMessage("Erreur lors de la sauvegarde.", 5000)
 
-        # Capture avant
-        df_before = self.manager.df.copy(deep=True)
 
-        # Sauvegarde JSON verrou
-        locked_path = os.path.join(os.path.dirname(self.manager.filepath), "locked_cells.json")
-        with open(locked_path, "w") as f:
-            json.dump(list(self.locked_cells), f)
-
-        # Mise à jour du DataFrame depuis la table (hors colonne des cases)
-        self.table.update_df_from_table(skip_columns=[0])
-        self.sync_checked_column()
-
-        # Sauvegarde Excel
-        self.manager.save_excel()
-
-        # Rechargement du fichier
-        self.manager.load_excel()
-        df_after = self.manager.df.copy(deep=True)
-
-        # Rechargement dans la table
-        self.load_table()
-
-        # Logs de différence
-        hash_before = hash_df(df_before)
-        hash_after = hash_df(df_after)
-        print(f"✅ Hash DF avant save: {hash_before}")
-        print(f"✅ Hash DF après save: {hash_after}")
-        if hash_before != hash_after:
-            print("❌ Le DataFrame a changé pendant la sauvegarde")
-            log_df_differences(df_before, df_after, self.locked_cells)
-        else:
-            print("✅ Aucune différence détectée dans le DataFrame.")
 
     def filter_table(self, text):
         self.loading = True
@@ -578,10 +560,9 @@ class MainWindow(QMainWindow):
             return
 
         rows = text.splitlines()
-        selected = self.table.selectedRanges()
+        selected = self.selectedRanges()
         if not selected:
             return
-
         start_row = selected[0].topRow()
         start_col = selected[0].leftColumn()
 
@@ -590,22 +571,17 @@ class MainWindow(QMainWindow):
             for c, value in enumerate(columns):
                 row_idx = start_row + r
                 col_idx = start_col + c
-                
 
-
-                if row_idx >= self.table.rowCount() or col_idx >= self.table.columnCount():
-                    print(f"📋 Collage {value} dans ({row_idx}, {col_idx})")
+                if row_idx >= self.rowCount() or col_idx >= self.columnCount():
                     continue
 
-                model_col_idx = col_idx - 1  # car col=0 = checkbox
-                if (row_idx, model_col_idx) in self.table.locked_cells:
-                    print(f"[🔒 VERROUILLÉ] Cellule ({row_idx}, {model_col_idx}) → collage annulé.")
-                    self.table.apply_lock_style(row_idx, col_idx)
+                model_col = col_idx - 1  # Décalage : DataFrame n’a pas la checkbox
+                if (row_idx, model_col) in self.locked_cells:
+                    logger.debug(f"🔒 Cellule verrouillée ({row_idx}, {model_col}) → collage ignoré.")
                     continue
-                
+
                 item = QTableWidgetItem(value)
-                self.table.setItem(row_idx, col_idx, item)
-                # self.mark_cell_modified(row_idx, col_idx)  # si tu veux remettre ce tracking
+                self.setItem(row_idx, col_idx, item)
 
 
     def import_new_tokens(self):
@@ -805,8 +781,31 @@ class MainWindow(QMainWindow):
 
 
 class TokenTableWidget(QTableWidget):
+    from logger import logger
+
+    def setup_logger(name="token_manager", log_file="token_manager.log", level=logging.DEBUG):
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+        fh = logging.FileHandler(log_file)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+
+        ch = logging.StreamHandler()
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+
+        return logger
+
+    logger = setup_logger()
+
+
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.manager = manager
         self.locked_cells = set()  # (row, column) tuples
 
     def keyPressEvent(self, event):
@@ -830,10 +829,8 @@ class TokenTableWidget(QTableWidget):
         self.loading = False
 
     def update_df_from_table(self, skip_columns=None):
-        print(f"📊 Début update_df_from_table : {self.rowCount()} lignes, {self.columnCount()} colonnes")
-
         if self.manager.df is None:
-            return
+                return
 
         if skip_columns is None:
             skip_columns = []
@@ -845,7 +842,7 @@ class TokenTableWidget(QTableWidget):
                 if col in skip_columns:
                     continue
                 if (row, model_col) in self.locked_cells:
-                    print(f"🔒 [SKIP] Cellule verrouillée ignorée ({row}, {model_col})")
+                    logger.debug(f"🔒 [SKIP] Cellule verrouillée ignorée ({row}, {model_col})")
                     continue
 
                 item = self.item(row, col)
@@ -853,11 +850,14 @@ class TokenTableWidget(QTableWidget):
                 value = value if value != "" else None
                 self.manager.df.iat[row, model_col] = value
 
-        print("🟡 Données extraites de la table vers manager.df (hors cases cochées) :")
-        print(self.manager.df.head(10).to_string())
+        logger.info("🟡 Données extraites de la table vers df (sans les cases cochées) :")
+        logger.info(self.manager.df.head(10).to_string())
 
-
-
+    def debug_print_locked_cells(self):
+        for (row, col) in sorted(self.locked_cells):
+            item = self.item(row, col + 1)  # +1 car col=0 est checkbox
+            val = item.text() if item else "N/A"
+            logger.debug(f"[🔒] ({row},{col}) = {val}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
