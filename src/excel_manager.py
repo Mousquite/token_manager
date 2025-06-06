@@ -57,6 +57,13 @@ class ExcelManager:
         col_idx = self.headers.index(field) + 1
         self.sheet.cell(row=row_idx + 2, column=col_idx, value=value)
         self.dirty = True
+        self._refresh_df()
+
+    def _refresh_df(self):
+        data = []
+        for row in self.sheet.iter_rows(min_row=2, values_only=True):
+            data.append(dict(zip(self.headers, row)))
+        self.df = pd.DataFrame(data)
 
     def update_last_scraped(self, row_idx):
         if "last_scraped" not in self.headers:

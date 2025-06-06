@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         self.import_button.clicked.connect(self.import_new_tokens)
 
         # Table principale
-        self.table = TokenTableWidget()
+        self.table = TokenTableWidget(manager=excel_manager, main_window=self)
         self.table.setFocusPolicy(Qt.StrongFocus)
         self.table.setFocus()
         self.table.setSortingEnabled(True)
@@ -150,7 +150,6 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.import_button)
 
         self.load_table_settings()
-
 
     def load_table(self, from_file: bool = True):
         self.loading = True
@@ -267,8 +266,6 @@ class MainWindow(QMainWindow):
             logger.error(f"❌ ERREUR pendant la sauvegarde : {e}")
             logger.error(traceback.format_exc())
             self.statusBar().showMessage("Erreur lors de la sauvegarde.", 5000)
-
-
 
     def filter_table(self, text):
         self.loading = True
@@ -413,10 +410,19 @@ class MainWindow(QMainWindow):
     def add_row(self):
         row_position = self.table.rowCount()
         self.table.insertRow(row_position)
-        for col in range(self.table.columnCount()):
+
+        # Initialisez la colonne de checkbox
+        checkbox_item = QTableWidgetItem()
+        checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        checkbox_item.setCheckState(Qt.Unchecked)
+        self.table.setItem(row_position, 0, checkbox_item)
+
+        # Initialisez les autres colonnes
+        for col in range(1, self.table.columnCount()):
             self.table.setItem(row_position, col, QTableWidgetItem(""))
-        self.update_df_from_table(skip_columns=[0])
+        self.table.update_df_from_table(skip_columns=[0])
         self.save_state_for_undo()
+
 
     def add_column(self):
         column_name, ok = QInputDialog.getText(self, "Ajouter une colonne", "Nom de la nouvelle colonne :")
@@ -502,7 +508,9 @@ class MainWindow(QMainWindow):
             old_value = ""
 
         if new_value != str(old_value):
-            self.manager.df.iat[row, col] = new_value
+            model_col = col - 1  # Décalage pour la checkbox (col 0)
+            if model_col >= 0:  # Ignore la colonne checkbox
+                self.manager.df.iat[row, model_col] = new_value
             print(f"📝 Cellule modifiée : ({row}, {col}) « {old_value} » → « {new_value} »")
             self.save_state_for_undo()
 
@@ -581,11 +589,10 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 self.setItem(row_idx, col_idx, item)
 
-
     def import_new_tokens(self):
         try:
             
-            self.update_df_from_table()
+            self.table.update_df_from_table()
             tnew = pd.read_excel("newtokens.xlsx")
 
             # On nettoie préventivement "checked" si elle est là
@@ -601,7 +608,10 @@ class MainWindow(QMainWindow):
     def lock_selected_cells(self):
         for item in self.table.selectedIndexes():
             row, col = item.row(), item.column()
-            self.locked_cells.add((row, col))  # corrigé ici
+            model_col = col - 1
+            if model_col >= 0:  # Ignore la checkbox
+                self.locked_cells.add((row, model_col))
+
             item_widget = self.table.item(row, col)
             if item_widget:
                 font = item_widget.font()
@@ -612,7 +622,9 @@ class MainWindow(QMainWindow):
     def unlock_selected_cells(self):
         for item in self.table.selectedIndexes():
             row, col = item.row(), item.column()
-            self.locked_cells.discard((row, col))  # corrigé ici
+            model_col = col - 1
+            if model_col >= 0:
+                self.locked_cells.discard((row, model_col))
             item_widget = self.table.item(row, col)
             if item_widget:
                 font = item_widget.font()
@@ -657,7 +669,7 @@ class MainWindow(QMainWindow):
                     
     # stacks pour undo
     def save_state_for_undo(self):
-
+        self.table.update_df_from_table(skip_columns=[0])  
 
         #verif table
         rows = self.table.rowCount()
@@ -768,14 +780,6 @@ class MainWindow(QMainWindow):
     ### probleme dans le stack, il faut regrouper les actions dans un seul stack
     ### pour undo en une action
 
-  
-        
-
-
-
-
-
-
 
 
 class TokenTableWidget(QTableWidget):
@@ -799,21 +803,23 @@ class TokenTableWidget(QTableWidget):
 
     logger = setup_logger()
 
-
-
-    def __init__(self, parent=None):
+    def __init__(self, manager, main_window=None, parent=None):
         super().__init__(parent)
         self.manager = manager
         self.locked_cells = set()  # (row, column) tuples
+        
+        assert hasattr(manager, 'df'), "manager must have a 'df' attribute"
+        if not hasattr(self.manager, 'df') or self.manager.df is None:
+            return
+
 
     def keyPressEvent(self, event):
-        self.loading = True
-            
         if isinstance(event, QKeyEvent):
             # Détection de Meta+Z (Undo sur macOS)
-            if event.key() == QKeySequence.Undo:
-                self.parent().undo_last_change()
-                return
+            if event.matches(QKeySequence.Undo):
+                if self.main_window:
+                    self.main_window.undo_last_change()
+                    return
 
                 # Supprimer contenu des cellules
             elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
@@ -824,9 +830,9 @@ class TokenTableWidget(QTableWidget):
 
             else: super().keyPressEvent(event)
 
-        self.loading = False
 
     def update_df_from_table(self, skip_columns=None):
+
         if self.manager.df is None:
                 return
 
@@ -863,3 +869,5 @@ if __name__ == "__main__":
     window = MainWindow(None, manager)
     window.show()
     sys.exit(app.exec_())
+
+
